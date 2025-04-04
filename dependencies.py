@@ -26,8 +26,8 @@ from openai import AsyncOpenAI
 from openai.resources.audio import AsyncSpeech, AsyncTranscriptions
 from openai.resources.chat.completions import AsyncCompletions
 
-from .config import Config
-from .model_manager import F5TTSModelManager,  WhisperModelManager
+from config import Config
+from model_manager import F5TTSModelManager,  WhisperModelManager
 from f5_tts.infer.utils_infer import load_vocoder
 from f5_tts.model import DiT, UNetT # Import model classes
 

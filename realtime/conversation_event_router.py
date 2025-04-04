@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING
 
 from openai.types.beta.realtime.error_event import Error
 
-from speaches.realtime.event_router import EventRouter
-from speaches.realtime.response_event_router import ResponseHandler
-from speaches.realtime.utils import generate_conversation_id
-from speaches.types.realtime import (
+from  realtime.event_router import EventRouter
+from  realtime.response_event_router import ResponseHandler
+from  realtime.utils import generate_conversation_id
+from  mouble_types.realtime import (
     ConversationItem,
     ConversationItemCreatedEvent,
     ConversationItemCreateEvent,
@@ -25,8 +25,8 @@ from speaches.types.realtime import (
 if TYPE_CHECKING:
     from openai.types.beta.realtime import ConversationItemTruncateEvent
 
-    from speaches.realtime.context import SessionContext
-    from speaches.realtime.pubsub import EventPubSub
+    from  realtime.context import SessionContext
+    from  realtime.pubsub import EventPubSub
 
 
 logger = logging.getLogger(__name__)

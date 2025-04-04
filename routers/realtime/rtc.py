@@ -20,22 +20,22 @@ from openai import AsyncOpenAI
 from openai.types.beta.realtime.error_event import Error
 from pydantic import ValidationError
 
-from ...dependencies import (
+from dependencies import (
     ConfigDependency,
     TranscriptionClientDependency,
 )
-from ...realtime.context import SessionContext
-from ...realtime.conversation_event_router import event_router as conversation_event_router
-from ...realtime.event_router import EventRouter
-from ...realtime.input_audio_buffer_event_router import (
+from realtime.context import SessionContext
+from realtime.conversation_event_router import event_router as conversation_event_router
+from realtime.event_router import EventRouter
+from realtime.input_audio_buffer_event_router import (
     event_router as input_audio_buffer_event_router,
 )
-from ...realtime.response_event_router import event_router as response_event_router
-from ...realtime.rtc.audio_stream_track import AudioStreamTrack
-from ...realtime.session import create_session_object_configuration
-from ...realtime.session_event_router import event_router as session_event_router
-from ...routers.realtime.ws import event_listener
-from ...types.realtime import (
+from realtime.response_event_router import event_router as response_event_router
+from realtime.rtc.audio_stream_track import AudioStreamTrack
+from realtime.session import create_session_object_configuration
+from realtime.session_event_router import event_router as session_event_router
+from routers.realtime.ws import event_listener
+from mouble_types.realtime import (
     SERVER_EVENT_TYPES,
     ErrorEvent,
     InputAudioBufferAppendEvent,

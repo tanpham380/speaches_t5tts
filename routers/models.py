@@ -10,20 +10,20 @@ from fastapi import (
 )
 
 # Import configuration and dependency
-from ..dependencies import ConfigDependency
+from dependencies import ConfigDependency
 
 # Import utility modules and helpers
-from .. import whisper_utils
-from ..f5tts_utils import create_f5tts_model_api_object
+import whisper_utils
+from f5tts_utils import create_f5tts_model_api_object
 
 # Import your API types
-from ..api_types import (
+from api_types import (
     ListModelsResponse,
     Model,
     F5TTSModel,
     ModelTask,
 )
-from ..model_aliases import ModelId
+from model_aliases import ModelId
 
 router = APIRouter(tags=["models"])
 logger = logging.getLogger(__name__)
@@ -37,6 +37,10 @@ def get_models(
     """Lists available models, optionally filtered by task."""
     models: List[Union[Model, F5TTSModel]] = []
     logger.info(f"Request to list models, task filter: {task}")
+    # print
+    if task == "-":
+        logger.warning("Task filter is '-', returning empty model list.")
+        return ListModelsResponse(data=models)
 
     # --- Add F5-TTS Models ---
     if task is None or task == "text-to-speech":

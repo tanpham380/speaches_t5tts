@@ -9,7 +9,7 @@ from typing import Optional # Added Optional
 import huggingface_hub
 from huggingface_hub.utils import HfHubHTTPError # Import specific error
 
-from .api_types import Model
+from api_types import Model
 
 LIBRARY_NAME = "ctranslate2"
 TASK_NAME_TAG = "automatic-speech-recognition"

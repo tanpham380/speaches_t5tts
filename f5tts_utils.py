@@ -12,8 +12,8 @@ import soundfile as sf
 import torch
 import torchaudio
 
-from .api_types import F5TTSModel
-from .config import F5TTSModelDefinition
+from api_types import F5TTSModel
+from config import F5TTSModelDefinition
 
 # --- Assumed Imports from your F5-TTS setup ---
 # Make sure these paths are correct for your project structure
@@ -32,7 +32,7 @@ except ImportError as e:
 # --- Assumed Import from speaches ---
 # Make sure this path is correct
 try:
-    from .audio import resample_audio # As used in the Kokoro example
+    from audio import resample_audio # As used in the Kokoro example
 except ImportError:
     # Define a placeholder if running standalone
     def resample_audio(audio_bytes: bytes, input_rate: int, output_rate: int) -> bytes:

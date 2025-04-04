@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
 from fastapi import (
     APIRouter,
@@ -13,10 +13,9 @@ from fastapi import (
 from faster_whisper.vad import VadOptions, get_speech_timestamps
 from pydantic import BaseModel
 
-from ..dependencies import AudioFileDependency  # noqa: TC001
+from dependencies import AudioFileDependency  # noqa: TC001
 
-if TYPE_CHECKING:
-    from ..model_aliases import ModelId
+from model_aliases import ModelId
 
 # NOTE: this should match the default value in `decode_audio` which gets called by `AudioFileDependency`
 SAMPLE_RATE = 16000

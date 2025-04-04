@@ -10,14 +10,14 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 # Import dependencies and helpers
-from ..dependencies import (
+from dependencies import (
     ConfigDependency, F5ttsModelManagerDependency, VocoderDependency,
     get_custom_voice_ref_path, get_model_class_from_name, list_custom_voice_ids # Add voice lookup
 )
-from ..f5tts_utils import generate_audio_f5tts # Correct function name
-from ..audio import convert_audio_format
-from ..model_aliases import ModelId # Keep if used for validation/aliasing
-from ..api_types import ResponseFormat, SUPPORTED_RESPONSE_FORMATS, Voice
+from f5tts_utils import generate_audio_f5tts # Correct function name
+from audio import convert_audio_format
+from model_aliases import ModelId # Keep if used for validation/aliasing
+from api_types import ResponseFormat, SUPPORTED_RESPONSE_FORMATS, Voice
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["text-to-speech"]) # Corrected tag

@@ -12,17 +12,17 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from faster_whisper.transcribe import BatchedInferencePipeline, TranscriptionInfo
 
-from ..api_types import (
+from api_types import (
     DEFAULT_TIMESTAMP_GRANULARITIES,
-    TIMESTAMP_GRANULARITIES_COMBINATIONS,
+    # TIMESTAMP_GRANULARITIES_COMBINATIONS,
     CreateTranscriptionResponseJson,
     CreateTranscriptionResponseVerboseJson,
     TimestampGranularities,
     TranscriptionSegment,
 )
-from ..dependencies import AudioFileDependency, ConfigDependency, ModelManagerDependency
-from ..model_aliases import ModelId
-from ..text_utils import segments_to_srt, segments_to_text, segments_to_vtt
+from dependencies import AudioFileDependency, ConfigDependency, ModelManagerDependency
+from model_aliases import ModelId
+from text_utils import segments_to_srt, segments_to_text, segments_to_vtt
 
 logger = logging.getLogger(__name__)
 

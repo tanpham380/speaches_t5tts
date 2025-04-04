@@ -1,16 +1,22 @@
 {
     "version": "0.2.0",
     "configurations": [
-        
         {
-            "name": "Python Debugger: main.py",
+            "name": "Python Debugger: FastAPI",
             "type": "debugpy",
             "request": "launch",
-            "program": "./src/speaches/main.py",
+            "module": "uvicorn",
+            "args": [
+                "--factory",
+                "main:create_app",
+                "--reload"
+            ],
             "console": "integratedTerminal",
             "env": {
-                "PYTHONPATH": "${workspaceFolder}",
+                "PYTHONPATH": "${workspaceFolder}"
             },
+            "justMyCode": true,
+            "python": "${command:python.interpreterPath}"
         }
     ]
 }

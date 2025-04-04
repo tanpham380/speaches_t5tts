@@ -5,10 +5,9 @@ from fastapi import (
 import huggingface_hub
 from huggingface_hub.hf_api import RepositoryNotFoundError
 
-from .. import hf_utils
-from ..dependencies import ModelManagerDependency
-from ..model_aliases import ModelId
-
+import hf_utils 
+from dependencies import ModelManagerDependency
+from model_aliases import ModelId
 router = APIRouter()
 
 

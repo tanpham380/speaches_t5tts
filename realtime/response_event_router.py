@@ -9,14 +9,14 @@ import openai
 from openai.types.beta.realtime.error_event import Error
 from pydantic import BaseModel
 
-from speaches.realtime.chat_utils import (
+from  realtime.chat_utils import (
     create_completion_params,
     items_to_chat_messages,
 )
-from speaches.realtime.event_router import EventRouter
-from speaches.realtime.session_event_router import unsupported_field_error, update_dict
-from speaches.realtime.utils import generate_response_id, task_done_callback
-from speaches.types.realtime import (
+from  realtime.event_router import EventRouter
+from  realtime.session_event_router import unsupported_field_error, update_dict
+from  realtime.utils import generate_response_id, task_done_callback
+from  mouble_types.realtime import (
     ConversationItemContentAudio,
     ConversationItemContentText,
     ConversationItemFunctionCall,
@@ -51,9 +51,9 @@ if TYPE_CHECKING:
     from openai.resources.chat import AsyncCompletions
     from openai.types.chat import ChatCompletionChunk
 
-    from speaches.realtime.context import SessionContext
-    from speaches.realtime.conversation_event_router import Conversation
-    from speaches.realtime.pubsub import EventPubSub
+    from  realtime.context import SessionContext
+    from  realtime.conversation_event_router import Conversation
+    from  realtime.pubsub import EventPubSub
 
 logger = logging.getLogger(__name__)
 

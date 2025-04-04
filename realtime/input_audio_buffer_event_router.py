@@ -9,16 +9,16 @@ import numpy as np
 from numpy.typing import NDArray
 from openai.types.beta.realtime.error_event import Error
 
-from speaches.audio import audio_samples_from_file
-from speaches.realtime.context import SessionContext
-from speaches.realtime.event_router import EventRouter
-from speaches.realtime.input_audio_buffer import (
+from  audio import audio_samples_from_file
+from  realtime.context import SessionContext
+from  realtime.event_router import EventRouter
+from  realtime.input_audio_buffer import (
     MAX_VAD_WINDOW_SIZE_SAMPLES,
     MS_SAMPLE_RATE,
     InputAudioBuffer,
     InputAudioBufferTranscriber,
 )
-from speaches.types.realtime import (
+from  mouble_types.realtime import (
     InputAudioBufferAppendEvent,
     InputAudioBufferClearedEvent,
     InputAudioBufferClearEvent,

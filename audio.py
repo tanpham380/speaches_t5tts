@@ -8,12 +8,12 @@ from typing import TYPE_CHECKING, BinaryIO
 import numpy as np
 import soundfile as sf
 
-from .config import SAMPLES_PER_SECOND
+from config import SAMPLES_PER_SECOND
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-    from .routers.speech import ResponseFormat
+    from routers.speech import ResponseFormat
 
 logger = logging.getLogger(__name__)
 

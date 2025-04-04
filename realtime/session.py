@@ -1,5 +1,5 @@
-from speaches.realtime.utils import generate_session_id
-from speaches.types.realtime import InputAudioTranscription, Session, TurnDetection
+from  realtime.utils import generate_session_id
+from  mouble_types.realtime import InputAudioTranscription, Session, TurnDetection
 
 # https://platform.openai.com/docs/guides/realtime-model-capabilities#session-lifecycle-events
 OPENAI_REALTIME_SESSION_DURATION_SECONDS = 30 * 60

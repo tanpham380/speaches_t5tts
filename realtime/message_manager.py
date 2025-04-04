@@ -10,9 +10,9 @@ import httpx_ws
 from openai.types.beta.realtime.error_event import Error
 from pydantic import ValidationError
 
-from speaches.realtime.pubsub import EventPubSub
-from speaches.realtime.utils import task_done_callback
-from speaches.types.realtime import (
+from  realtime.pubsub import EventPubSub
+from  realtime.utils import task_done_callback
+from  mouble_types.realtime import (
     CLIENT_EVENT_TYPES,
     SERVER_EVENT_TYPES,
     ErrorEvent,

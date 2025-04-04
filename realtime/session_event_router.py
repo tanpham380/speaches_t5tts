@@ -5,8 +5,8 @@ from typing import TYPE_CHECKING
 
 from openai.types.beta.realtime.error_event import Error
 
-from speaches.realtime.event_router import EventRouter
-from speaches.types.realtime import (
+from  realtime.event_router import EventRouter
+from  mouble_types.realtime import (
     NOT_GIVEN,
     ErrorEvent,
     Session,
@@ -16,7 +16,7 @@ from speaches.types.realtime import (
 )
 
 if TYPE_CHECKING:
-    from speaches.realtime.context import SessionContext
+    from  realtime.context import SessionContext
 
 logger = logging.getLogger(__name__)
 

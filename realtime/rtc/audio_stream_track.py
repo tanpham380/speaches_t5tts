@@ -8,9 +8,9 @@ from av.audio.frame import AudioFrame
 import numpy as np
 from openai.types.beta.realtime import ResponseAudioDeltaEvent
 
-from speaches.audio import audio_samples_from_file
-from speaches.realtime.context import SessionContext
-from speaches.realtime.input_audio_buffer_event_router import resample_audio_data
+from  audio import audio_samples_from_file
+from  realtime.context import SessionContext
+from  realtime.input_audio_buffer_event_router import resample_audio_data
 
 logger = logging.getLogger(__name__)
 

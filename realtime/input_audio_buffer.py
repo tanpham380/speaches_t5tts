@@ -9,8 +9,8 @@ from openai import NotGiven
 from pydantic import BaseModel
 import soundfile as sf
 
-from speaches.realtime.utils import generate_item_id, task_done_callback
-from speaches.types.realtime import (
+from  realtime.utils import generate_item_id, task_done_callback
+from  mouble_types.realtime import (
     ConversationItemContentInputAudio,
     ConversationItemInputAudioTranscriptionCompletedEvent,
     ConversationItemMessage,
@@ -22,8 +22,8 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
     from openai.resources.audio import AsyncTranscriptions
 
-    from speaches.realtime.conversation_event_router import Conversation
-    from speaches.realtime.pubsub import EventPubSub
+    from  realtime.conversation_event_router import Conversation
+    from  realtime.pubsub import EventPubSub
 
 SAMPLE_RATE = 16000
 MS_SAMPLE_RATE = 16

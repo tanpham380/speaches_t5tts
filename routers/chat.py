@@ -23,20 +23,19 @@ from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
 from pydantic import Field, model_validator
 
-from ..dependencies import (
+from dependencies import (
     CompletionClientDependency,
     SpeechClientDependency,
     TranscriptionClientDependency,
 )
-from ..routers.stt import format_as_sse
-from ..text_utils import SentenceChunker
-from ..types.chat import (
+from routers.stt import format_as_sse
+from text_utils import SentenceChunker
+from mouble_types.chat import (
     ChatCompletionAssistantMessageParam,
     ChatCompletionContentPartTextParam,
+    CompletionCreateParamsBase as OpenAICompletionCreateParamsBase
 )
-from ..types.chat import (
-    CompletionCreateParamsBase as OpenAICompletionCreateParamsBase,
-)
+
 
 # Resources:
 # - https://platform.openai.com/docs/guides/audio

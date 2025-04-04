@@ -4,12 +4,12 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
-from speaches.types.realtime import CLIENT_EVENT_TYPES, Event
+from  mouble_types.realtime import CLIENT_EVENT_TYPES, Event
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from speaches.realtime.context import SessionContext
+    from  realtime.context import SessionContext
 
 logger = logging.getLogger(__name__)
 

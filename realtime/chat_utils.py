@@ -18,7 +18,7 @@ from openai.types.chat.completion_create_params import (
 from openai.types.shared_params.function_definition import FunctionDefinition
 
 
-from ..types.realtime import ConversationItem, Response
+from mouble_types.realtime import ConversationItem, Response
 
 logger = logging.getLogger(__name__)
 

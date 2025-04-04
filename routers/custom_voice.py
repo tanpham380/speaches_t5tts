@@ -9,8 +9,8 @@ from fastapi import (
 )
 from pydantic import BaseModel
 
-from speaches.dependencies import ConfigDependency, ApiKeyDependency # Assuming ApiKeyDependency handles auth
-from speaches.dependencies import save_upload_file_tmp, list_custom_voice_ids, get_custom_voice_ref_path
+from  dependencies import ConfigDependency, ApiKeyDependency # Assuming ApiKeyDependency handles auth
+from  dependencies import save_upload_file_tmp, list_custom_voice_ids, get_custom_voice_ref_path
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
