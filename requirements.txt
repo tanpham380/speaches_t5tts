@@ -1,0 +1,17 @@
+ctranslate2>=4.5.0
+fastapi>=0.115.6
+faster-whisper>=1.1.1
+huggingface-hub[hf-transfer]>=0.25.1
+numpy>=1.26.0,<1.27.0
+pydantic-settings>=2.5.2
+pydantic>=2.10.0
+python-multipart>=0.0.10
+sounddevice>=0.5.1
+soundfile>=0.12.1
+uvicorn>=0.30.6
+openai[realtime]>=1.63.0
+aiostream>=0.6.4
+cachetools>=5.5.1
+httpx-ws>=0.7.1
+aiortc>=1.10.1
+f5-tts>=0.2.6
