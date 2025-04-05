@@ -25,6 +25,7 @@ def create_session_object_configuration(model: str) -> Session:
             silence_duration_ms=700,
             create_response=True,
         ),
+        # turn_detection=None,
         temperature=0.8,
         tools=[],
         tool_choice="auto",

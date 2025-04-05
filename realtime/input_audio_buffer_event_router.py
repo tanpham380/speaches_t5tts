@@ -199,25 +199,42 @@ def handle_input_audio_buffer_append(ctx: SessionContext, event: InputAudioBuffe
 
 
 @event_router.register("input_audio_buffer.commit")
-def handle_input_audio_buffer_commit(ctx: SessionContext, _event: InputAudioBufferCommitEvent) -> None:
-    input_audio_buffer_id = next(reversed(ctx.input_audio_buffers))
+def handle_input_audio_buffer_commit(ctx: SessionContext, event: InputAudioBufferCommitEvent) -> None:
+    # Lấy ID buffer từ sự kiện client gửi
+    input_audio_buffer_id = event.item_id # Giả sử client gửi đúng ID
+
+    logger.info(f"[{ctx.session.id}] Received client commit for item {input_audio_buffer_id}.")
+
+    # Kiểm tra xem buffer có tồn tại không
+    if input_audio_buffer_id not in ctx.input_audio_buffers:
+        logger.warning(f"[{ctx.session.id}] Client committed non-existent buffer {input_audio_buffer_id}. Ignoring.")
+        ctx.pubsub.publish_nowait(create_invalid_request_error(f"Cannot commit buffer: ID {input_audio_buffer_id} not found."))
+        return
+
     input_audio_buffer = ctx.input_audio_buffers[input_audio_buffer_id]
+
     if input_audio_buffer.duration_ms < MIN_AUDIO_BUFFER_DURATION_MS:
+        logger.warning(f"[{ctx.session.id}] Client committed buffer {input_audio_buffer_id} which is too short ({input_audio_buffer.duration_ms}ms). Ignoring.")
         ctx.pubsub.publish_nowait(
-            create_invalid_request_error(
-                message=f"Error committing input audio buffer: buffer too small. Expected at least {MIN_AUDIO_BUFFER_DURATION_MS}ms of audio, but buffer only has {input_audio_buffer.duration_ms}.00ms of audio."
-            )
+            create_invalid_request_error(f"Buffer {input_audio_buffer_id} too small to commit.")
         )
+        # Không tạo buffer mới nếu commit không thành công
     else:
+        logger.info(f"[{ctx.session.id}] Committing buffer {input_audio_buffer_id} due to client request.")
+        # Publish sự kiện commit
         ctx.pubsub.publish_nowait(
             InputAudioBufferCommittedEvent(
                 previous_item_id=next(reversed(ctx.conversation.items), None),  # FIXME
                 item_id=input_audio_buffer_id,
             )
         )
-        input_audio_buffer = InputAudioBuffer(ctx.pubsub)
-        ctx.input_audio_buffers[input_audio_buffer.id] = input_audio_buffer
-
+        # Tạo buffer mới cho audio tiếp theo
+        new_buffer = InputAudioBuffer(ctx.pubsub)
+        ctx.input_audio_buffers[new_buffer.id] = new_buffer
+        logger.info(f"[{ctx.session.id}] Created new buffer {new_buffer.id} after client commit.")
+        # Reset trạng thái VAD của buffer cũ (nếu cần thiết và buffer cũ không bị xóa ngay)
+        input_audio_buffer.is_speaking = False
+        input_audio_buffer.last_speech_start_time = None
 
 @event_router.register("input_audio_buffer.clear")
 def handle_input_audio_buffer_clear(ctx: SessionContext, _event: InputAudioBufferClearEvent) -> None:
