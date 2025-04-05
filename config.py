@@ -16,9 +16,9 @@ type Quantization = Literal[
 ]
 
 class WhisperConfig(BaseModel):
-    inference_device: Device = "auto"
+    inference_device: Device = "cuda"
     device_index: int | list[int] = 0
-    compute_type: Quantization = "default"
+    compute_type: Quantization = "bfloat16"
     cpu_threads: int = 0
     num_workers: int = 1
     ttl: int = Field(default=300, ge=-1)

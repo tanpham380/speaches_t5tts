@@ -140,6 +140,7 @@ class TranscriptionSegment(BaseModel):
         """Converts an iterable of FasterWhisper segments to Pydantic TranscriptionSegment objects."""
         for segment in segments_iterable:
             words_list = None
+            # print(f"Segment ID: {segment.id}, Start: {segment.start}, End: {segment.end}, Text: {segment.text}")
             # Check if segment.words exists and is not None before iterating
             if getattr(segment, 'words', None):
                  words_list = [

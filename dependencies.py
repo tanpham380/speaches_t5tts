@@ -213,7 +213,7 @@ SpeechClientDependency = Annotated[AsyncSpeech, Depends(get_speech_client)]
 @lru_cache
 def get_transcription_client() -> AsyncTranscriptions:
     # this might not work as expected if `stt_router` won't have shared state (access to the same `model_manager`) with the main FastAPI `app`. TODO: verify
-    from .routers.stt import (
+    from routers.stt import (
         router as stt_router,
     )
 

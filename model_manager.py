@@ -116,15 +116,17 @@ class WhisperModelManager:
         self._lock = threading.Lock()
 
     def _load_fn(self, model_id: str) -> WhisperModel:
+        device = self.whisper_config.inference_device
+        compute_type = self.whisper_config.compute_type
+        # print(f"Loading Whisper model {model_id} on device {device} with compute type {compute_type}")
         return WhisperModel(
             model_id,
-            device=self.whisper_config.inference_device,
+            device=device,
             device_index=self.whisper_config.device_index,
-            compute_type=self.whisper_config.compute_type,
+            compute_type=compute_type,
             cpu_threads=self.whisper_config.cpu_threads,
             num_workers=self.whisper_config.num_workers,
         )
-
     def _handle_model_unloaded(self, model_id: str) -> None:
         with self._lock:
             if model_id in self.loaded_models:
