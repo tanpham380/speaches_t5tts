@@ -80,7 +80,7 @@ class InputAudioBuffer:
             ]
 
 
-class InputAudioBufferTranscriber:
+class   InputAudioBufferTranscriber:
     def __init__(
         self,
         *,
