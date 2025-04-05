@@ -66,10 +66,12 @@ class Config(BaseSettings):
     log_level: str = "info" # Changed default to info
     host: str = Field(alias="UVICORN_HOST", default="0.0.0.0")
     port: int = Field(alias="UVICORN_PORT", default=8000)
-    allow_origins: list[str] | None = None
+    allow_origins: list[str] | None = ["*"]
     whisper: WhisperConfig = WhisperConfig()
     f5tts: F5TTSConfig = F5TTSConfig()
     custom_voices: CustomVoicesConfig = CustomVoicesConfig() 
+    chat_completion_base_url: str = Field(default="http://localhost:8000/v1", description="Base URL for the Chat Completion API.")
+    chat_completion_api_key: SecretStr | None = Field(default="sk-your-openai-key",alias="CHAT_COMPLETION_API_KEY", description="API Key for the Chat Completion service (optional).")
 
     @model_validator(mode='after')
     def check_paths(self) -> 'Config':

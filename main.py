@@ -1,4 +1,4 @@
-#main.py
+# main.py
 from __future__ import annotations
 
 import logging
@@ -7,8 +7,10 @@ from fastapi import (
     FastAPI,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.responses import RedirectResponse
+# Remove RedirectResponse unless needed elsewhere
+# from starlette.responses import RedirectResponse
 
 from dependencies import ApiKeyDependency, get_config
 from logger import setup_logger
@@ -24,6 +26,7 @@ from routers.models import (
 from routers.realtime.rtc import (
     router as realtime_rtc_router,
 )
+# *** Import the specific router ***
 from routers.realtime.ws import (
     router as realtime_ws_router,
 )
@@ -72,20 +75,31 @@ def create_app() -> FastAPI:
     app.include_router(models_router)
     app.include_router(misc_router)
     app.include_router(realtime_rtc_router)
+    # *** Include the WebSocket router ***
     app.include_router(realtime_ws_router)
     app.include_router(speech_router)
     # app.include_router(vad_router)
     app.include_router(custom_voices_router)
-    # HACK: move this elsewhere
-    app.get("/v1/realtime", include_in_schema=False)(lambda: RedirectResponse(url="/v1/realtime/"))
-    app.mount("/v1/realtime", StaticFiles(directory="realtime-console/dist", html=True))
 
+    # --- REMOVE MANUAL OPTIONS HANDLER ---
+    # @app.options("/v1/realtime{path:.*}", include_in_schema=False)
+    # async def options_realtime_all(path: str = ""):
+    #     # This will be handled by the CORS middleware
+    #     return {}
+
+    # --- REMOVE REDIRECTS ---
+    app.get("/v1/realtime", include_in_schema=False)(lambda: RedirectResponse(url="/v1/realtime/"))
+
+    app.mount("/v1/realtime", StaticFiles(directory="realtime-console/dist", html=True), name="realtime_console")
+
+    # --- KEEP CORS MIDDLEWARE ---
+    # This will handle OPTIONS requests for API endpoints like the WebSocket handshake path
     if config.allow_origins is not None:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=config.allow_origins,
             allow_credentials=True,
-            allow_methods=["*"],
+            allow_methods=["*"], # Allows GET (for WS upgrade) and OPTIONS (for preflight)
             allow_headers=["*"],
         )
 

@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 SAMPLE_RATE = 16000
 MS_SAMPLE_RATE = 16
 MAX_VAD_WINDOW_SIZE_SAMPLES = 3000 * MS_SAMPLE_RATE
-
+MIN_VAD_WINDOW_SIZE_SAMPLES = 16000 // 2 # 0.5 giây * 16kHz
 
 # NOTE not in `src/speaches/realtime/input_audio_buffer_event_router.py` due to circular import
 class VadState(BaseModel):

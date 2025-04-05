@@ -50,8 +50,8 @@ async def event_listener(ctx: SessionContext) -> None:
         logger.info("Event listener task finished")
 
 
-@router.websocket("/v1/realtime")
-async def realtime(
+@router.websocket("/v1/realtime") # <--- CHANGE THIS LINE
+async def realtime_websocket(
     ws: WebSocket,
     model: str,
     config: ConfigDependency,

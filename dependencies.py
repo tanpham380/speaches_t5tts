@@ -191,7 +191,7 @@ CompletionClientDependency = Annotated[AsyncCompletions, Depends(get_completion_
 @lru_cache
 def get_speech_client() -> AsyncSpeech:
     # this might not work as expected if `speech_router` won't have shared state (access to the same `model_manager`) with the main FastAPI `app`. TODO: verify
-    from .routers.speech import (
+    from routers.speech import (
         router as speech_router,
     )
 

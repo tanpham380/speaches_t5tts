@@ -311,7 +311,7 @@ class PartialSession(BaseModel):
     temperature: float | NotGiven = NOT_GIVEN
     tool_choice: ToolChoice | NotGiven = NOT_GIVEN
     tools: list[Tool] | NotGiven = NOT_GIVEN
-    turn_detection: TurnDetection | NotGiven = NOT_GIVEN
+    turn_detection: TurnDetection | NotGiven | None = NOT_GIVEN
     voice: str | NotGiven = NOT_GIVEN
 
 
