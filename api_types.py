@@ -4,13 +4,16 @@ from __future__ import annotations # Ensure forward references work smoothly
 from collections.abc import Iterable
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Type, Union # Added List
+from typing import Any, Dict, List, Literal, Optional, Type, TypeAlias, Union # Added TypeAlias
 import datetime # Added datetime for timestamp
 import logging # Added logging
 
 # Ensure FasterWhisper types are importable or define fallbacks if optional
 try:
     import faster_whisper.transcribe
+    # Create type aliases when import succeeds
+    FasterWhisperSegment: TypeAlias = faster_whisper.transcribe.Segment
+    FasterWhisperTranscriptionInfo: TypeAlias = faster_whisper.transcribe.TranscriptionInfo
 except ImportError:
     # Define dummy types if FasterWhisper is optional or for type checking without install
     logging.getLogger(__name__).warning("faster_whisper not found, using dummy types for TranscriptionInfo/Segment.")
@@ -34,19 +37,23 @@ except ImportError:
          compression_ratio: float = 0.0
          no_speech_prob: float = 0.0
          words: Optional[List[Any]] = None # Placeholder for word type
+    
+    # Create type aliases for the dummy types
+    FasterWhisperTranscriptionInfo: TypeAlias = TranscriptionInfo
+    # FasterWhisperSegment is already defined
 
-    # Replace the import target with the dummy type
-    faster_whisper = type('FasterWhisperDummy', (object,), {'transcribe': type('TranscribeDummy', (object,), {'TranscriptionInfo': TranscriptionInfo, 'Segment': FasterWhisperSegment})})()
-
+    # We can still create the runtime dummy for compatibility
+    _faster_whisper_dummy = type('FasterWhisperDummy', (object,), {'transcribe': type('TranscribeDummy', (object,), {'TranscriptionInfo': TranscriptionInfo, 'Segment': FasterWhisperSegment})})()
+    
 from pydantic import BaseModel, Field, computed_field, field_validator, HttpUrl
 
 # Assuming text_utils is correctly placed and importable
 try:
     # Ensure the path is correct relative to this file or project structure
-    from .text_utils import segments_to_text # Example relative import
+    from text_utils import segments_to_text # Example relative import
 except ImportError:
      try:
-         from .text_utils import segments_to_text # Try absolute import
+         from text_utils import segments_to_text # Try absolute import
      except ImportError:
           # Basic placeholder if text_utils is missing during type checking
           def segments_to_text(segments): return ""
@@ -271,6 +278,13 @@ VALID_TIMESTAMP_GRANULARITY_SETS: List[set[Literal["segment", "word"]]] = [
     {"segment"},
     {"word"},
     {"segment", "word"},
+]
+TIMESTAMP_GRANULARITIES_COMBINATIONS: list[TimestampGranularities] = [
+    [],  # should be treated as ["segment"]. https://platform.openai.com/docs/api-reference/audio/createTranscription#audio-createtranscription-timestamp_granularities
+    ["segment"],
+    ["word"],
+    ["word", "segment"],
+    ["segment", "word"],  # same as ["word", "segment"] but order is different
 ]
 
 # --- F5-TTS Internal Request/Response Models (Not directly exposed via OpenAI API) ---

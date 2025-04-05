@@ -33,9 +33,9 @@ from routers.speech import (
 from routers.stt import (
     router as stt_router,
 )
-from routers.vad import (
-    router as vad_router,
-)
+# from routers.vad import (
+#     router as vad_router,
+# )
 from routers.custom_voice import (
     router as custom_voices_router,
 )
@@ -74,7 +74,7 @@ def create_app() -> FastAPI:
     app.include_router(realtime_rtc_router)
     app.include_router(realtime_ws_router)
     app.include_router(speech_router)
-    app.include_router(vad_router)
+    # app.include_router(vad_router)
     app.include_router(custom_voices_router)
     # HACK: move this elsewhere
     app.get("/v1/realtime", include_in_schema=False)(lambda: RedirectResponse(url="/v1/realtime/"))

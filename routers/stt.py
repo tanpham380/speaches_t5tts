@@ -1,26 +1,39 @@
+# routers/stt.py
+
 import asyncio
 from collections.abc import Generator, Iterable
 import logging
-from typing import Annotated, Literal
+from typing import Annotated, Literal, List
+import av
+
+# --- ADD THESE IMPORTS ---
+import numpy as np
+from numpy.typing import NDArray
+# --- END IMPORTS ---
 
 from fastapi import (
     APIRouter,
     Form,
     Request,
     Response,
+    HTTPException,
+    UploadFile,
+    File,
+    Depends
 )
 from fastapi.responses import StreamingResponse
 from faster_whisper.transcribe import BatchedInferencePipeline, TranscriptionInfo
+from faster_whisper.audio import decode_audio
 
 from api_types import (
     DEFAULT_TIMESTAMP_GRANULARITIES,
-    # TIMESTAMP_GRANULARITIES_COMBINATIONS,
+    VALID_TIMESTAMP_GRANULARITY_SETS,
     CreateTranscriptionResponseJson,
     CreateTranscriptionResponseVerboseJson,
     TimestampGranularities,
     TranscriptionSegment,
 )
-from dependencies import AudioFileDependency, ConfigDependency, ModelManagerDependency
+from dependencies import ConfigDependency, ModelManagerDependency # Keep these type aliases
 from model_aliases import ModelId
 from text_utils import segments_to_srt, segments_to_text, segments_to_vtt
 
@@ -29,11 +42,38 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["automatic-speech-recognition"])
 
 type ResponseFormat = Literal["text", "json", "verbose_json", "srt", "vtt"]
-
-# https://platform.openai.com/docs/api-reference/audio/createTranscription#audio-createtranscription-response_format
 DEFAULT_RESPONSE_FORMAT: ResponseFormat = "json"
 
+# --- Helper function for audio decoding (updated type hint) ---
+# Use the imported types for the annotation
+async def decode_audio_from_upload(file: UploadFile) -> NDArray[np.float32]:
+    try:
+        audio_data = decode_audio(file.file)
+        # Ensure the return type is float32 if decode_audio doesn't guarantee it
+        # (faster_whisper's decode_audio usually returns float32)
+        if audio_data.dtype != np.float32:
+             logger.debug(f"Casting audio data from {audio_data.dtype} to float32")
+             audio_data = audio_data.astype(np.float32)
+        return audio_data
+    except av.error.InvalidDataError as e:
+        logger.error(f"Failed to decode audio '{file.filename}'. Invalid data or unsupported format.")
+        raise HTTPException(
+            status_code=415,
+            detail=f"Failed to decode audio: Unsupported file format or invalid data in '{file.filename}'.",
+        ) from e
+    except av.error.ValueError as e:
+        logger.error(f"Failed to decode audio '{file.filename}'. Value error (likely empty file).")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to decode audio: The provided file '{file.filename}' is likely empty or corrupted.",
+        ) from e
+    except Exception as e:
+        logger.exception(f"An unexpected error occurred while decoding audio '{file.filename}'.")
+        raise HTTPException(status_code=500, detail="Internal server error during audio decoding.") from e
+    finally:
+        await file.close()
 
+# --- Functions segments_to_response, format_as_sse, segments_to_streaming_response remain the same ---
 def segments_to_response(
     segments: Iterable[TranscriptionSegment],
     transcription_info: TranscriptionInfo,
@@ -73,113 +113,180 @@ def segments_to_streaming_response(
     response_format: ResponseFormat,
 ) -> StreamingResponse:
     def segment_responses() -> Generator[str, None, None]:
-        for i, segment in enumerate(segments):
+        segments_list = list(segments) # Consume iterator once if needed multiple times
+        # Ensure transcription_info is accessible if needed inside loop
+        for i, segment in enumerate(segments_list):
             if response_format == "text":
                 data = segment.text
             elif response_format == "json":
-                data = CreateTranscriptionResponseJson.from_segments([segment]).model_dump_json()
+                # For streaming json, send each segment as a complete JSON object
+                data = CreateTranscriptionResponseJson(text=segment.text).model_dump_json()
             elif response_format == "verbose_json":
-                data = CreateTranscriptionResponseVerboseJson.from_segment(
-                    segment, transcription_info
+                # For streaming verbose_json, send each segment as a verbose object
+                # Need language/duration from info, but text/words/segments from the *current* segment
+                data = CreateTranscriptionResponseVerboseJson(
+                    task=transcription_info.transcription_options.get("task", "transcribe"), # Get task from info if possible
+                    language=transcription_info.language,
+                    duration=transcription_info.duration, # Use overall duration? Or segment duration? Check OpenAI spec for streaming. Using segment end for now.
+                    text=segment.text,
+                    words=segment.words,
+                    segments=[segment] # Stream one segment at a time
                 ).model_dump_json()
             elif response_format == "vtt":
-                data = segments_to_vtt(segment, i)
+                 # VTT header needs to be sent first if streaming line-by-line
+                 # This simple approach sends full blocks per segment
+                 if i == 0:
+                     yield format_as_sse(f"WEBVTT\n\n{segments_to_vtt(segment, i)}")
+                 else:
+                      yield format_as_sse(segments_to_vtt(segment, i))
+                 continue # Skip default format_as_sse for VTT after handling
             elif response_format == "srt":
                 data = segments_to_srt(segment, i)
-            yield format_as_sse(data)
+            else:
+                 # Fallback or error for unknown format
+                 logger.warning(f"Unsupported streaming format: {response_format}")
+                 continue
+
+            if response_format != "vtt": # Already handled VTT yield
+                 yield format_as_sse(data)
+
+        # Optionally send a final message or close marker if needed by SSE spec/client
+        # yield format_as_sse("[DONE]") # Example
 
     return StreamingResponse(segment_responses(), media_type="text/event-stream")
 
 
+# --- Updated Endpoints ---
+
 @router.post(
     "/v1/audio/translations",
-    response_model=str | CreateTranscriptionResponseJson | CreateTranscriptionResponseVerboseJson,
+    response_model=None,
 )
-def translate_file(
+async def translate_file(
+    # --- MOVE DEPENDENCIES BEFORE DEFAULT ARGUMENTS ---
     config: ConfigDependency,
     model_manager: ModelManagerDependency,
-    audio: AudioFileDependency,
-    model: Annotated[ModelId, Form()],
-    prompt: Annotated[str | None, Form()] = None,
-    response_format: Annotated[ResponseFormat, Form()] = DEFAULT_RESPONSE_FORMAT,
-    temperature: Annotated[float, Form()] = 0.0,
-    stream: Annotated[bool, Form()] = False,
-    vad_filter: Annotated[bool, Form()] = False,
+    # --- END MOVE ---
+    # Non-default File parameter
+    file: Annotated[UploadFile, File(description="The audio file object (wav, mp3, m4a, etc.) to translate.")],
+    # Non-default Form parameter
+    model: Annotated[ModelId, Form(description="ID of the model to use for translation." , example="erax-ai/EraX-WoW-Turbo-V1.1-CT2") ],
+    # Default Form parameters
+    prompt: Annotated[str | None, Form(description="An optional text to guide the model's style or continue a previous audio segment.")] = None,
+    response_format: Annotated[ResponseFormat, Form(description="The format of the transcript output.")] = DEFAULT_RESPONSE_FORMAT,
+    temperature: Annotated[float, Form(description="The sampling temperature, between 0 and 1.")] = 0.0,
+    stream: Annotated[bool, Form(description="Whether to stream back partial progress.")] = False,
+    vad_filter: Annotated[bool, Form(description="Enable VAD filter")] = False,
 ) -> Response | StreamingResponse:
+
+    logger.info(f"Received translation request for file '{file.filename}', model '{model}', format '{response_format}'")
+    audio_data = await decode_audio_from_upload(file) # Decode the audio here
+
     with model_manager.load_model(model) as whisper:
         whisper_model = BatchedInferencePipeline(model=whisper) if config.whisper.use_batched_mode else whisper
-        segments, transcription_info = whisper_model.transcribe(
-            audio,
+        segments_generator, transcription_info = whisper_model.transcribe(
+            audio_data, # Pass the decoded numpy array
             task="translate",
             initial_prompt=prompt,
             temperature=temperature,
             vad_filter=vad_filter,
+            word_timestamps=False,
         )
-        segments = TranscriptionSegment.from_faster_whisper_segments(segments)
+        pydantic_segments = TranscriptionSegment.from_faster_whisper_segments(segments_generator)
 
         if stream:
-            return segments_to_streaming_response(segments, transcription_info, response_format)
+            logger.debug(f"Streaming translation response (format: {response_format})")
+            return segments_to_streaming_response(pydantic_segments, transcription_info, response_format)
         else:
-            return segments_to_response(segments, transcription_info, response_format)
+            logger.debug(f"Returning full translation response (format: {response_format})")
+            segments_list = list(pydantic_segments)
+            return segments_to_response(segments_list, transcription_info, response_format)
 
 
-# HACK: Since Form() doesn't support `alias`, we need to use a workaround.
-async def get_timestamp_granularities(request: Request) -> TimestampGranularities:
+# Keep this helper for timestamp_granularities[]
+async def get_timestamp_granularities(request: Request) -> List[Literal["segment", "word"]]:
     form = await request.form()
-    if form.get("timestamp_granularities[]") is None:
+    raw_values = form.getlist("timestamp_granularities[]")
+    if not raw_values:
         return DEFAULT_TIMESTAMP_GRANULARITIES
-    timestamp_granularities = form.getlist("timestamp_granularities[]")
-    assert timestamp_granularities in TIMESTAMP_GRANULARITIES_COMBINATIONS, (
-        f"{timestamp_granularities} is not a valid value for `timestamp_granularities[]`."
-    )
-    return timestamp_granularities
+
+    provided_set = set(raw_values)
+    if provided_set not in VALID_TIMESTAMP_GRANULARITY_SETS:
+        raise HTTPException(
+            status_code=422,
+            detail=(f"Invalid value combination for 'timestamp_granularities[]': {raw_values}. "
+                    f"Allowed combinations (any order): [], ['segment'], ['word'], ['segment', 'word'].")
+        )
+
+    if not provided_set:
+         return DEFAULT_TIMESTAMP_GRANULARITIES
+    else:
+         validated_list = list(provided_set)
+         result_list: List[Literal["segment", "word"]] = [item for item in validated_list if item in ("segment", "word")]
+         return result_list
 
 
-# https://platform.openai.com/docs/api-reference/audio/createTranscription
-# https://github.com/openai/openai-openapi/blob/master/openapi.yaml#L8915
 @router.post(
     "/v1/audio/transcriptions",
-    response_model=str | CreateTranscriptionResponseJson | CreateTranscriptionResponseVerboseJson,
+    response_model=None,
 )
-def transcribe_file(
+async def transcribe_file(
+    # --- MOVE DEPENDENCIES BEFORE DEFAULT ARGUMENTS ---
+    request: Request, # Keep request early for timestamp helper
     config: ConfigDependency,
     model_manager: ModelManagerDependency,
-    request: Request,
-    audio: AudioFileDependency,
-    model: Annotated[ModelId, Form()],
-    language: Annotated[str | None, Form()] = None,
-    prompt: Annotated[str | None, Form()] = None,
-    response_format: Annotated[ResponseFormat, Form()] = DEFAULT_RESPONSE_FORMAT,
-    temperature: Annotated[float, Form()] = 0.0,
-    timestamp_granularities: Annotated[
-        TimestampGranularities,
-        # WARN: `alias` doesn't actually work.
-        Form(alias="timestamp_granularities[]"),
-    ] = ["segment"],
-    stream: Annotated[bool, Form()] = False,
-    hotwords: Annotated[str | None, Form()] = None,
-    vad_filter: Annotated[bool, Form()] = False,
+    # --- END MOVE ---
+    # Non-default File parameter
+    file: Annotated[UploadFile, File(description="The audio file object (wav, mp3, m4a, etc.) to transcribe.")],
+    # Non-default Form parameter
+    model: Annotated[ModelId, Form(description="ID of the model to use for transcription." , example="erax-ai/EraX-WoW-Turbo-V1.1-CT2")],
+    # Default Form parameters
+    language: Annotated[str | None, Form(description="The language of the input audio." , example="vi")] = None,
+    prompt: Annotated[str | None, Form(description="An optional text to guide the model's style or continue a previous audio segment." , example="") ] = None,
+    response_format: Annotated[ResponseFormat, Form(description="The format of the transcript output.")] = DEFAULT_RESPONSE_FORMAT,
+    temperature: Annotated[float, Form(description="The sampling temperature, between 0 and 1.")] = 0.0,
+    stream: Annotated[bool, Form(description="Whether to stream back partial progress.")] = False,
+    hotwords: Annotated[str | None, Form(description="A list of words to help the model recognize faster.")] = None,
+    vad_filter: Annotated[bool, Form(description="Enable VAD filter")] = False,
+    # timestamp_granularities handled by the helper function below
 ) -> Response | StreamingResponse:
-    timestamp_granularities = asyncio.run(get_timestamp_granularities(request))
-    if timestamp_granularities != DEFAULT_TIMESTAMP_GRANULARITIES and response_format != "verbose_json":
-        logger.warning(
-            "It only makes sense to provide `timestamp_granularities[]` when `response_format` is set to `verbose_json`. See https://platform.openai.com/docs/api-reference/audio/createTranscription#audio-createtranscription-timestamp_granularities."
-        )
+
+    timestamp_granularities = await get_timestamp_granularities(request)
+    word_timestamps_requested = "word" in timestamp_granularities
+
+    if word_timestamps_requested and response_format != "verbose_json":
+         logger.warning(
+            f"Requested word timestamps ('timestamp_granularities[]' included 'word') but response_format is '{response_format}'. Word timestamps only available in 'verbose_json'. Ignoring."
+         )
+         word_timestamps_requested = False
+
+    if "segment" in timestamp_granularities and response_format != "verbose_json":
+         logger.debug(
+              f"Requested segment timestamps ('timestamp_granularities[]' included 'segment' or was default) but response_format is '{response_format}'. Segment details only in 'verbose_json'."
+         )
+
+
+    logger.info(f"Received transcription request for file '{file.filename}', model '{model}', language '{language}', format '{response_format}'")
+    audio_data = await decode_audio_from_upload(file)
+
     with model_manager.load_model(model) as whisper:
         whisper_model = BatchedInferencePipeline(model=whisper) if config.whisper.use_batched_mode else whisper
-        segments, transcription_info = whisper_model.transcribe(
-            audio,
+        segments_generator, transcription_info = whisper_model.transcribe(
+            audio_data,
             task="transcribe",
             language=language,
             initial_prompt=prompt,
-            word_timestamps="word" in timestamp_granularities,
+            word_timestamps=word_timestamps_requested,
             temperature=temperature,
             vad_filter=vad_filter,
             hotwords=hotwords,
         )
-        segments = TranscriptionSegment.from_faster_whisper_segments(segments)
+        pydantic_segments = TranscriptionSegment.from_faster_whisper_segments(segments_generator)
 
         if stream:
-            return segments_to_streaming_response(segments, transcription_info, response_format)
+            logger.debug(f"Streaming transcription response (format: {response_format})")
+            return segments_to_streaming_response(pydantic_segments, transcription_info, response_format)
         else:
-            return segments_to_response(segments, transcription_info, response_format)
+            logger.debug(f"Returning full transcription response (format: {response_format})")
+            segments_list = list(pydantic_segments)
+            return segments_to_response(segments_list, transcription_info, response_format)

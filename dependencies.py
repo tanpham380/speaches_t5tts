@@ -173,34 +173,6 @@ async def verify_api_key(
 ApiKeyDependency = Depends(verify_api_key)
 
 
-# TODO: test async vs sync performance
-def audio_file_dependency(
-    file: Annotated[UploadFile, Form()],
-) -> NDArray[float32]:
-    try:
-        audio = decode_audio(file.file)
-    except av.error.InvalidDataError as e:
-        raise HTTPException(
-            status_code=415,
-            detail="Failed to decode audio. The provided file type is not supported.",
-        ) from e
-    except av.error.ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            # TODO: list supported file types
-            detail="Failed to decode audio. The provided file is likely empty.",
-        ) from e
-    except Exception as e:
-        logger.exception(
-            "Failed to decode audio. This is likely a bug. Please create an issue at https://github.com/speaches-ai/speaches/issues/new."
-        )
-        raise HTTPException(status_code=500, detail="Failed to decode audio.") from e
-    else:
-        return audio  # pyright: ignore reportReturnType
-
-
-AudioFileDependency = Annotated[NDArray[float32], Depends(audio_file_dependency)]
-
 
 @lru_cache
 def get_completion_client() -> AsyncCompletions:

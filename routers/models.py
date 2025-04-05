@@ -29,6 +29,8 @@ router = APIRouter(tags=["models"])
 logger = logging.getLogger(__name__)
 
 
+# Add this after the part where regular Whisper models are loaded
+
 @router.get("/v1/models")
 def get_models(
     config: ConfigDependency,
@@ -73,6 +75,19 @@ def get_models(
                  models.append(w_model)
                  count += 1
             logger.debug(f"Added {count} Whisper models.")
+            
+            # --- Add custom Whisper models ---
+            # Add erax-ai/EraX-WoW-Turbo-V1.1 directly
+            custom_erax_model = whisper_utils.add_custom_whisper_model(
+                "erax-ai/EraX-WoW-Turbo-V1.1",
+                languages=["vi"]  # Add appropriate languages
+            )
+            models.append(custom_erax_model)
+            logger.debug("Added custom erax-ai/EraX-WoW-Turbo-V1.1 Whisper model")
+            
+            # You can add more custom models here as needed
+            # models.append(whisper_utils.add_custom_whisper_model("another-org/model-name", languages=["en", "fr"]))
+            
         except Exception as e:
             logger.error(f"Failed to get Whisper models: {e}", exc_info=True)
 
@@ -80,8 +95,9 @@ def get_models(
     logger.info(f"Returning {len(models)} models matching filter.")
     return ListModelsResponse(data=models)
 
-
 # --- Updated Get Model Details ---
+# Update the get_model function to check for custom models
+
 @router.get("/v1/models/{model_id:path}")
 def get_model(
     model_id: ModelId, # Use the alias-resolved ID
@@ -101,8 +117,13 @@ def get_model(
             logger.error(f"Internal config error: Model ID '{model_id}' in f5_engine_model_ids but missing definition.")
             raise HTTPException(status_code=500, detail="Server configuration error for this model ID.")
 
-    # 2. Check Whisper models using specific lookup functions
-    logger.debug(f"Model ID '{model_id}' not F5-TTS, checking Whisper models...")
+    # 2. Check for custom Whisper models
+    if model_id == "erax-ai/EraX-WoW-Turbo-V1.1":
+        logger.info(f"Returning custom model info for: {model_id}")
+        return whisper_utils.add_custom_whisper_model(model_id, languages=["en"])
+
+    # 3. Check Whisper models using specific lookup functions
+    logger.debug(f"Model ID '{model_id}' not F5-TTS or custom, checking Whisper models...")
     try:
         whisper_model: Optional[Model] = None
         get_whisper_info_func = (
@@ -123,8 +144,8 @@ def get_model(
         logger.error(f"Error checking Whisper models for ID '{model_id}': {e}", exc_info=True)
         # Don't fail request yet, maybe it's another type
 
-    # 3. Add checks for other model types if necessary
+    # 4. Add checks for other model types if necessary
 
-    # 4. If not found anywhere
+    # 5. If not found anywhere
     logger.warning(f"Model ID '{model_id}' not found in any known configuration or registry.")
     raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")

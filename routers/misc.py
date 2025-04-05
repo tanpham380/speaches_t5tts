@@ -16,19 +16,6 @@ def health() -> Response:
     return Response(status_code=200, content="OK")
 
 
-@router.post(
-    "/api/pull/{model_id:path}",
-    tags=["experimental"],
-    summary="Download a model from Hugging Face if it doesn't exist locally.",
-)
-def pull_model(model_id: ModelId) -> Response:
-    if hf_utils.does_local_model_exist(model_id):
-        return Response(status_code=200, content=f"Model {model_id} already exists")
-    try:
-        huggingface_hub.snapshot_download(model_id, repo_type="model")
-    except RepositoryNotFoundError as e:
-        return Response(status_code=404, content=str(e))
-    return Response(status_code=201, content=f"Model {model_id} downloaded")
 
 
 @router.get("/api/ps", tags=["experimental"], summary="Get a list of loaded models.")

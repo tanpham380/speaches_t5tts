@@ -10,11 +10,44 @@ import huggingface_hub
 from huggingface_hub.utils import HfHubHTTPError # Import specific error
 
 from api_types import Model
+import datetime
 
 LIBRARY_NAME = "ctranslate2"
 TASK_NAME_TAG = "automatic-speech-recognition"
 
 logger = logging.getLogger(__name__)
+
+
+def add_custom_whisper_model(
+    model_id: str,
+    languages: Optional[list[str]] = None,
+    created_timestamp: Optional[int] = None,
+) -> Model:
+    """
+    Adds a custom Whisper model by ID. Useful for models that may not be properly 
+    tagged on the HF Hub or for local custom models.
+    
+    Args:
+        model_id: The Hugging Face model ID (e.g., 'erax-ai/EraX-WoW-Turbo-V1.1')
+        languages: Optional list of language codes supported by the model
+        created_timestamp: Optional creation timestamp (defaults to current time)
+        
+    Returns:
+        Model object representing the custom Whisper model
+    """
+    if created_timestamp is None:
+        created_timestamp = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        
+    # Extract owner from the model ID
+    owner = model_id.split("/")[0] if "/" in model_id else "local"
+    
+    return Model(
+        id=model_id,
+        created=created_timestamp,
+        owned_by=owner,
+        language=languages or [],
+        task=TASK_NAME_TAG,
+    )
 
 def _create_model_object_from_hf_info(model_info: huggingface_hub.hf_api.ModelInfo) -> Optional[Model]:
     """Helper to create a Speaches Model object from HuggingFace ModelInfo."""
@@ -64,6 +97,7 @@ def list_whisper_models() -> Generator[Model, None, None]:
 
     for model_info in models_iterator:
         model_obj = _create_model_object_from_hf_info(model_info)
+        
         if model_obj:
             yield model_obj
 
