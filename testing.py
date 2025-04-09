@@ -30,10 +30,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("testing")
 
 # --- Cấu hình Chunk và Pause ---
-CHUNK_DURATION_MS = 1000 # <<< Giữ nguyên chunk nhỏ
+CHUNK_DURATION_MS = 700 # <<< Giữ nguyên chunk nhỏ
 # MIN_PAUSE_MS = 300    # <<< Không dùng nữa
 # MAX_PAUSE_MS = 1000   # <<< Không dùng nữa
-WAIT_AFTER_SEND_SECONDS = 20 # <<< Giảm thời gian chờ xuống hợp lý hơn
+WAIT_AFTER_SEND_SECONDS = 5 # <<< Giảm thời gian chờ xuống hợp lý hơn
 # --- Hết cấu hình ---
 
 # WebRTC expects 48kHz stereo s16 input track based on server's audio_receiver
@@ -607,7 +607,7 @@ if __name__ == "__main__":
 
     # # --- End of the script ---
     # # Note: The script will exit after the main function completes.
-    # model = "erax-ai/EraX-WoW-Turbo-V1.1-CT2"
+    # model = "erax-ai/EraX-WoW-Turbo-V1.1-CT2" Systran/faster-whisper-large-v3
 
     #python testing.py rtc --file generated_429000_long.wav --model Systran/faster-whisper-large-v3 --server http://localhost:8000
-    #python testing.py ws --file generated_429000_long.wav --model erax-ai/EraX-WoW-Turbo-V1.1-CT2 --server http://localhost:8000
+    #python testing.py ws --file generated_429000_long.wav --model Systran/faster-whisper-large-v3 --server http://localhost:8000

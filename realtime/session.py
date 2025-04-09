@@ -23,7 +23,7 @@ def create_session_object_configuration(model: str) -> Session:
             type="server_vad",
             threshold=0.5,
             prefix_padding_ms=300,
-            silence_duration_ms=150,
+            silence_duration_ms=200,
             create_response=True,
         ),
         # turn_detection=None,
