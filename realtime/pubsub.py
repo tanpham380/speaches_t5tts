@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from  mouble_types.realtime import CLIENT_EVENT_TYPES, SERVER_EVENT_TYPES, Event
+from mouble_types.realtime import CLIENT_EVENT_TYPES, SERVER_EVENT_TYPES, Event
 
 logger = logging.getLogger(__name__)
 

@@ -1,3 +1,4 @@
+# realtime/session.py
 from  realtime.utils import generate_session_id
 from  mouble_types.realtime import InputAudioTranscription, Session, TurnDetection
 
@@ -22,7 +23,7 @@ def create_session_object_configuration(model: str) -> Session:
             type="server_vad",
             threshold=0.5,
             prefix_padding_ms=300,
-            silence_duration_ms=700,
+            silence_duration_ms=150,
             create_response=True,
         ),
         # turn_detection=None,

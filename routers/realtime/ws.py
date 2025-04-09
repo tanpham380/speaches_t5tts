@@ -7,22 +7,22 @@ from fastapi import (
 )
 from openai import AsyncOpenAI
 
-from dependencies import (
+from  dependencies import (
     ConfigDependency,
     TranscriptionClientDependency,
 )
-from realtime.context import SessionContext
-from realtime.conversation_event_router import event_router as conversation_event_router
-from realtime.event_router import EventRouter
-from realtime.input_audio_buffer_event_router import (
+from  realtime.context import SessionContext
+from  realtime.conversation_event_router import event_router as conversation_event_router
+from  realtime.event_router import EventRouter
+from  realtime.input_audio_buffer_event_router import (
     event_router as input_audio_buffer_event_router,
 )
-from realtime.message_manager import WsServerMessageManager
-from realtime.response_event_router import event_router as response_event_router
-from realtime.session import OPENAI_REALTIME_SESSION_DURATION_SECONDS, create_session_object_configuration
-from realtime.session_event_router import event_router as session_event_router
-from realtime.utils import task_done_callback
-from mouble_types.realtime import SessionCreatedEvent
+from  realtime.message_manager import WsServerMessageManager
+from  realtime.response_event_router import event_router as response_event_router
+from  realtime.session import OPENAI_REALTIME_SESSION_DURATION_SECONDS, create_session_object_configuration
+from  realtime.session_event_router import event_router as session_event_router
+from  realtime.utils import task_done_callback
+from  mouble_types.realtime import SessionCreatedEvent
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ async def event_listener(ctx: SessionContext) -> None:
     try:
         async with asyncio.TaskGroup() as tg:
             async for event in ctx.pubsub.poll():
-                # logger.debug(f"Received event: {event.type}")
+                logger.debug(f"Received event: {event.type}")
 
                 task = tg.create_task(event_router.dispatch(ctx, event))
                 task.add_done_callback(task_done_callback)
@@ -50,8 +50,8 @@ async def event_listener(ctx: SessionContext) -> None:
         logger.info("Event listener task finished")
 
 
-@router.websocket("/v1/realtime") # <--- CHANGE THIS LINE
-async def realtime_websocket(
+@router.websocket("/v1/realtime")
+async def realtime(
     ws: WebSocket,
     model: str,
     config: ConfigDependency,

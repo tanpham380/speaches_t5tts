@@ -68,8 +68,6 @@ from pydantic.type_adapter import TypeAdapter
 
 from realtime.utils import generate_event_id, generate_item_id
 
-# from ..utils import generate_event_id, generate_item_id
-
 logger = logging.getLogger(__name__)
 
 
@@ -311,7 +309,7 @@ class PartialSession(BaseModel):
     temperature: float | NotGiven = NOT_GIVEN
     tool_choice: ToolChoice | NotGiven = NOT_GIVEN
     tools: list[Tool] | NotGiven = NOT_GIVEN
-    turn_detection: TurnDetection | NotGiven | None = NOT_GIVEN
+    turn_detection: TurnDetection | NotGiven = NOT_GIVEN
     voice: str | NotGiven = NOT_GIVEN
 
 

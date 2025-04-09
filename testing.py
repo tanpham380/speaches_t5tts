@@ -1,493 +1,613 @@
+# testing.py
 import asyncio
+import base64
+from fractions import Fraction
+import io
 import json
 import logging
 import time
+import argparse
 import ssl
-import os
-import random # Để tạo khoảng dừng ngẫu nhiên (tùy chọn)
-from fractions import Fraction # <<< THÊM IMPORT FRACTION
+from pathlib import Path
+import random # <<< Vẫn giữ import này cũng được, không dùng nữa thôi
 
-import aiohttp
-import numpy as np
-# <<< THÊM IMPORT SOUNDFILE >>>
-try:
-    import soundfile as sf
-except ImportError:
-    print("Lỗi: Thư viện soundfile chưa được cài đặt.")
-    print("Vui lòng cài đặt bằng lệnh: pip install soundfile")
-    exit(1)
-# <<< KẾT THÚC IMPORT SOUNDFILE >>>
-
+import httpx
+import websockets
 from aiortc import (
-    MediaStreamError,
-    MediaStreamTrack,
     RTCIceCandidate,
     RTCPeerConnection,
     RTCSessionDescription,
-    RTCConfiguration,
-    RTCIceServer,
-    RTCDataChannel
+    MediaStreamTrack,
 )
+# Bỏ MediaPlayer, MediaRelay nếu không dùng trực tiếp
+from pydub import AudioSegment
+from pydub.utils import make_chunks
 from av import AudioFrame
+import numpy as np
 
-try:
-    # Import các loại sự kiện cần thiết từ file định nghĩa type của bạn
-    from mouble_types.realtime import (
-        SessionUpdateEvent, ResponseCreateEvent, PartialSession,
-        client_event_type_adapter, server_event_type_adapter, NotGiven, NOT_GIVEN,
-        SessionCreatedEvent, ResponseTextDeltaEvent,
-        ResponseAudioTranscriptDeltaEvent,
-        ConversationItemInputAudioTranscriptionCompletedEvent, ErrorEvent,
-        # InputAudioBufferCommitEvent # Không cần commit từ client nữa
-    )
-except ImportError as e:
-    print(f"Lỗi import mouble_types.realtime: {e}")
-    print("Vui lòng đảm bảo file mouble_types/realtime.py có thể truy cập được và đúng cấu trúc.")
-    exit(1)
-
-# --- Cấu hình ---
+# --- Configuration ---
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("realtime_live_test_client")
-# --- Bật Log DEBUG cho aiortc (tùy chọn) ---
-# logging.getLogger("aiortc").setLevel(logging.DEBUG)
-# logging.getLogger("aioice").setLevel(logging.DEBUG)
-# logging.getLogger("av").setLevel(logging.DEBUG)
+logger = logging.getLogger("testing")
 
-SERVER_URL = "http://localhost:8000" # Thay đổi nếu cần
-API_ENDPOINT = f"{SERVER_URL}/v1/realtime"
-MODEL_ID = "Systran/faster-whisper-large-v3" # Model STT bạn muốn test
-AUDIO_FILE_PATH = "generated_429000_long.wav" # File audio nguồn
+# --- Cấu hình Chunk và Pause ---
+CHUNK_DURATION_MS = 1000 # <<< Giữ nguyên chunk nhỏ
+# MIN_PAUSE_MS = 300    # <<< Không dùng nữa
+# MAX_PAUSE_MS = 1000   # <<< Không dùng nữa
+WAIT_AFTER_SEND_SECONDS = 20 # <<< Giảm thời gian chờ xuống hợp lý hơn
+# --- Hết cấu hình ---
 
-# --- Cấu hình gửi Chunk ---
-CHUNK_DURATION_S = 0.04  # Gửi chunk 40ms (phù hợp hơn cho Opus)
-# MIN_PAUSE_S = 0.5     # Không cần pause nếu stream liên tục
-# MAX_PAUSE_S = 2.0
-TARGET_SAMPLE_RATE = 48000 # Sample rate gửi qua WebRTC
-TARGET_CHANNELS = 1        # Gửi kênh mono
+# WebRTC expects 48kHz stereo s16 input track based on server's audio_receiver
+RTC_TARGET_SAMPLE_RATE = 48000
+RTC_TARGET_CHANNELS = 2
+RTC_TARGET_SAMPLE_WIDTH = 2 # s16 = 2 bytes
 
-# Kiểm tra file tồn tại
-if not os.path.exists(AUDIO_FILE_PATH):
-    logger.error(f"File âm thanh không tìm thấy tại: {AUDIO_FILE_PATH}")
-    exit(1)
+# WebSocket sends raw audio bytes. Based on server logic (RTC receiver resamples to 24k),
+# sending 24k mono s16 seems appropriate for the input_audio_buffer.append event.
+WS_TARGET_SAMPLE_RATE = 24000
+WS_TARGET_CHANNELS = 1
+WS_TARGET_SAMPLE_WIDTH = 2 # s16 = 2 bytes
 
-# Cấu hình WebRTC
-ICE_SERVERS = []
-RTC_CONFIG = RTCConfiguration(iceServers=[RTCIceServer(**s) for s in ICE_SERVERS])
+# Global variable to signal audio sending completion for RTC
+rtc_audio_sending_done = asyncio.Event()
+# --- Thêm Event để quản lý đóng kết nối RTC ---
+rtc_connection_closed_event = asyncio.Event()
 
-# Biến toàn cục để lưu session ID
-current_session_id = None
 
-# --- Hàm trợ giúp ---
-async def wait_for_connection(pc: RTCPeerConnection):
-    """Chờ cho đến khi kết nối ICE thành công."""
-    @pc.on("iceconnectionstatechange")
-    async def on_iceconnectionstatechange():
-        logger.info(f"ICE Connection State is {pc.iceConnectionState}")
-        # Không raise lỗi trực tiếp ở đây
+# --- Helper: Audio Processing (Xoá phần giả lập pause) ---
+async def stream_audio_chunks(
+    file_path: str,
+    chunk_duration_ms: int,
+    target_sample_rate: int,
+    target_channels: int,
+    target_sample_width: int, # Bytes per sample
+    target_format: str = 's16le' # 's16le' for signed 16-bit little-endian
+):
+    """
+    Asynchronously yields audio chunks from a file, resampled and timed,
+    *without* adding artificial pauses.
+    """
+    logger.info(f"Loading audio file: {file_path}")
+    try:
+        audio = AudioSegment.from_wav(file_path)
+    except Exception as e:
+        logger.error(f"Error loading audio file {file_path}: {e}")
+        return
 
-    t_start = time.time()
-    timeout = 20.0
-    while time.time() - t_start < timeout:
-        state = pc.iceConnectionState
-        if state in ["completed", "connected"]:
-            logger.info("ICE Connection Established.")
+    logger.info(
+        f"Original audio: {audio.frame_rate}Hz, {audio.channels}ch, "
+        f"{audio.sample_width * 8}-bit"
+    )
+
+    # Resample and set channels if necessary
+    if (
+        audio.frame_rate != target_sample_rate
+        or audio.channels != target_channels
+        # sample_width check
+    ):
+        logger.info(
+            f"Resampling audio to {target_sample_rate}Hz, {target_channels}ch, "
+            f"{target_sample_width * 8}-bit"
+        )
+        try:
+            audio = audio.set_frame_rate(target_sample_rate)
+            audio = audio.set_channels(target_channels)
+            if audio.sample_width != target_sample_width:
+                 logger.warning(f"Original sample width {audio.sample_width*8}-bit differs from target {target_sample_width*8}-bit. Ensuring export matches.")
+
+        except Exception as e:
+            logger.error(f"Error during audio resampling: {e}")
             return
-        if state in ["failed", "closed", "disconnected"]:
-             logger.error(f"ICE Connection failed or closed prematurely ({state})")
-             raise ConnectionError(f"ICE Connection failed or closed prematurely ({state})")
-        await asyncio.sleep(0.1)
 
-    logger.error(f"ICE Connection timed out after {timeout} seconds (state: {pc.iceConnectionState}).")
-    raise ConnectionError("ICE Connection timed out")
+    logger.info(f"Audio prepared for streaming. Duration: {audio.duration_seconds:.2f}s")
+    chunks = make_chunks(audio, chunk_duration_ms)
+    start_time = time.perf_counter()
+    total_chunks = len(chunks)
+    # min_pause_sec = MIN_PAUSE_MS / 1000.0 # <<< Không dùng nữa
+    # max_pause_sec = MAX_PAUSE_MS / 1000.0 # <<< Không dùng nữa
 
-# --- Track Âm thanh tùy chỉnh để gửi Chunk ---
-class AudioChunkTrack(MediaStreamTrack):
+# Trong hàm stream_audio_chunks của testing.py
+
+    for i, chunk in enumerate(chunks):
+        # --- LƯU DEBUG TRỰC TIẾP TỪ CHUNK (Giữ nguyên) ---
+        # try:
+        #     pydub_direct_save_dir = Path("./client_debug_audio/pydub_direct_export")
+        #     pydub_direct_save_dir.mkdir(parents=True, exist_ok=True)
+        #     # Đặt tên file rõ ràng hơn một chút (ví dụ: dùng rate/bit từ chunk nếu cần)
+        #     pydub_direct_save_path = pydub_direct_save_dir / f"pydub_chunk_{i:04d}_{chunk.frame_rate//1000}k_{chunk.sample_width*8}bit.wav"
+        #     chunk.export(str(pydub_direct_save_path), format="wav")
+        # except Exception as pydub_export_err:
+        #     logger.error(f"Failed to export direct pydub chunk {i+1}: {pydub_export_err}")
+
+
+        raw_data = chunk.raw_data
+        logger.debug(f"Chunk {i+1} raw_data length: {len(raw_data)}")
+
+        # --- Kiểm tra độ dài raw_data (Giữ nguyên hoặc cải thiện nếu cần) ---
+        expected_raw_data_len = int((len(chunk) / 1000.0) * chunk.frame_rate * chunk.frame_width)
+        if abs(len(raw_data) - expected_raw_data_len) > chunk.frame_width * 2: # Sai số nhỏ cho phép
+            logger.warning(f"Chunk {i+1}: Potential mismatch between pydub length and raw_data length. "
+                           f"Pydub ms={len(chunk)}, Expected bytes ~{expected_raw_data_len}, Got raw_data bytes={len(raw_data)}")
+
+        if not raw_data: continue
+
+        # --- Phần lưu debug từ raw_data (SỬA Ở ĐÂY) ---
+        try:
+            # ***** SỬ DỤNG THUỘC TÍNH THỰC TẾ CỦA CHUNK *****
+            chunk_segment = AudioSegment(
+                data=raw_data,
+                sample_width=chunk.sample_width,  # <<< Lấy từ chunk
+                frame_rate=chunk.frame_rate,    # <<< Lấy từ chunk
+                channels=chunk.channels          # <<< Lấy từ chunk
+            )
+            # # Cập nhật tên file để phản ánh đúng định dạng đã lưu
+            # client_raw_save_path = Path(f"./client_debug_audio/from_raw_data/client_chunk_{i:04d}_{chunk.frame_rate//1000}k_{chunk.sample_width*8}bit_{chunk.channels}ch.wav")
+            # client_raw_save_path.parent.mkdir(parents=True, exist_ok=True)
+            # chunk_segment.export(str(client_raw_save_path), format="wav")
+
+        except Exception as client_save_err:
+            # Log lỗi rõ ràng hơn nếu vẫn xảy ra
+            logger.error(f"Failed to save client chunk from raw data {i+1} using chunk properties "
+                         f"(w={chunk.sample_width}, r={chunk.frame_rate}, c={chunk.channels}): {client_save_err}")
+
+        actual_width = chunk.sample_width
+        actual_rate = chunk.frame_rate
+        actual_channels = chunk.channels
+
+        data_to_yield = raw_data
+
+        if (actual_width != target_sample_width or
+            actual_rate != target_sample_rate or
+            actual_channels != target_channels):
+
+            # logger.warning(f"Chunk {i+1} raw_data format ({actual_width*8}-bit, {actual_rate}Hz, {actual_channels}ch) "
+            #                f"differs from target ({target_sample_width*8}-bit, {target_sample_rate}Hz, {target_channels}ch). "
+            #                f"Attempting final conversion before yielding.")
+            try:
+                temp_segment = AudioSegment(data=raw_data, sample_width=actual_width, frame_rate=actual_rate, channels=actual_channels)
+
+                if temp_segment.frame_rate != target_sample_rate:
+                    temp_segment = temp_segment.set_frame_rate(target_sample_rate)
+                if temp_segment.channels != target_channels:
+                    temp_segment = temp_segment.set_channels(target_channels)
+                buffer = io.BytesIO()
+                temp_segment.export(buffer, format="s16le")
+                data_to_yield = buffer.getvalue()
+                # logger.debug(f"Chunk {i+1} successfully converted to target format before yielding. New raw_data length: {len(data_to_yield)}")
+
+            except Exception as conversion_err:
+                logger.error(f"Chunk {i+1}: Failed final conversion to target format before yielding: {conversion_err}. Yielding unconverted data.")
+                data_to_yield = raw_data
+                # yield raw_data # Yield dữ liệu gốc nếu không convert được
+
+        # Kiểm tra lại số byte của data_to_yield trước khi yield
+        bytes_per_sample_final = target_sample_width # Kể cả sau khi convert
+        channels_final = target_channels
+        frame_size_final = channels_final * bytes_per_sample_final
+        if len(data_to_yield) % frame_size_final != 0:
+             num_frames = len(data_to_yield) // frame_size_final
+             logger.warning(f"Chunk {i+1} final data size {len(data_to_yield)} for yielding is not perfectly divisible by final frame size ({frame_size_final}). Truncating.")
+             data_to_yield = data_to_yield[:num_frames * frame_size_final] # Cắt bỏ phần thừa
+
+        if len(data_to_yield) == 0:
+            logger.debug(f"Skipping empty chunk {i+1} after final processing.")
+            continue
+
+        # Yield dữ liệu đã (hy vọng) đúng định dạng target
+        yield data_to_yield
+
+        # --- Timing delay (Giữ nguyên) ---
+        current_cumulative_duration_sec = (i + 1) * (chunk_duration_ms / 1000.0)
+        expected_playback_time = start_time + current_cumulative_duration_sec
+        current_time = time.perf_counter()
+        playback_delay = expected_playback_time - current_time
+        if playback_delay > 0:
+            await asyncio.sleep(playback_delay)
+
+    logger.info("Finished yielding all audio chunks.")
+
+
+class DummyAudioTrack(MediaStreamTrack):
+    """
+    A MediaStreamTrack that reads audio from our async generator (without extra pauses)
+    and yields AV AudioFrames.
+    """
     kind = "audio"
 
-    def __init__(self, file_path, chunk_duration_s, target_sample_rate, target_channels):
+    def __init__(self, audio_generator):
         super().__init__()
-        self.file_path = file_path
-        self.target_sample_rate = target_sample_rate
-        self.target_channels = target_channels
-        self.chunk_samples = int(chunk_duration_s * target_sample_rate)
-        self.dtype = np.int16
-        self._file = None
-        self._queue = asyncio.Queue(maxsize=10) # Tăng queue size một chút
-        self._reader_task: asyncio.Task | None = None
-        self._stopped = asyncio.Event()
-        self._pts = 0
-        try:
-            self._time_base = Fraction(1, target_sample_rate) # <<< SỬA DÙNG FRACTION
-        except ZeroDivisionError:
-             raise ValueError("Invalid target sample rate")
-        except ValueError:
-             raise ValueError("Invalid time base")
+        self._generator = audio_generator # Generator không còn pause nhân tạo
+        self._queue = asyncio.Queue()
+        self._producer_task = None
+        self._timestamp = 0 # Initialize timestamp here
+        logger.info("DummyAudioTrack initialized.")
 
-    async def start(self):
-        """Mở file và bắt đầu task đọc file."""
-        if self._reader_task is None:
-            logger.info("Starting audio file reader task...")
+    async def _run_producer(self):
+        logger.info("Audio frame producer task started.")
+        async for chunk_bytes in self._generator: # Generator handles timing (chỉ playback)
+            if not chunk_bytes:
+                 continue
+            samples_np = np.frombuffer(chunk_bytes, dtype=np.int16)
+            num_samples_per_channel = len(samples_np) // RTC_TARGET_CHANNELS
+            if num_samples_per_channel == 0:
+                 logger.warning("Received chunk resulted in 0 samples per channel, skipping frame.")
+                 continue
             try:
-                self._file = sf.SoundFile(self.file_path, 'r')
-                logger.info(f"Opened sound file: {self.file_path} (SR={self._file.samplerate}, CH={self._file.channels})")
-                if self._file.samplerate != self.target_sample_rate or self._file.channels != self.target_channels:
-                     logger.warning(f"File gốc SR/Ch khác target. Sẽ đọc và chuyển đổi.")
-                self._reader_task = asyncio.create_task(self._read_chunks())
-            except Exception as e:
-                 logger.exception(f"Failed to open sound file or start reader task: {e}")
-                 self._stopped.set()
-                 raise
-        else:
-             logger.warning("Reader task already started.")
+                frame = AudioFrame(
+                    format="s16",
+                    layout="stereo" if RTC_TARGET_CHANNELS == 2 else "mono",
+                    samples=num_samples_per_channel
+                )
+                frame.sample_rate = RTC_TARGET_SAMPLE_RATE
+                frame.planes[0].update(samples_np.tobytes())
+                frame.pts = self._timestamp
+                frame.time_base = Fraction(1, RTC_TARGET_SAMPLE_RATE)
+                self._timestamp += num_samples_per_channel
+                await self._queue.put(frame)
+            except Exception as frame_error:
+                 logger.error(f"Error creating or queuing AudioFrame: {frame_error}")
 
-    def stop(self):
-        """Dừng track và đóng file (đồng bộ)."""
-        logger.info("Stopping AudioChunkTrack (sync call)...")
-        self._stopped.set()
-        if self._reader_task and not self._reader_task.done():
-            self._reader_task.cancel()
-        if self._file and not self._file.closed:
-            try:
-                self._file.close()
-                logger.debug("Sound file closed in stop().")
-            except Exception as e:
-                 logger.warning(f"Exception closing file in stop(): {e}")
-            self._file = None
-        logger.info("AudioChunkTrack stop() finished (sync).")
-
-    async def _read_chunks(self):
-        """Đọc file audio thành các chunk và đưa vào queue."""
-        logger.info("Audio reader task started execution.")
-        chunk_count = 0
-        processed_samples = 0
-        silence_chunk_samples = int(1.0 * self.target_sample_rate)
-        silence_chunk_data = np.zeros(silence_chunk_samples, dtype=self.dtype)
-
-        try:
-            while not self._stopped.is_set():
-                # Đọc chính xác số sample cho chunk duration ở sample rate gốc
-                read_samples = int(CHUNK_DURATION_S * self._file.samplerate)
-                data_float = self._file.read(frames=read_samples, dtype='float64', always_2d=False)
-
-                if data_float is None or len(data_float) == 0:
-                    logger.info("End of audio file reached.")
-                    await self._queue.put(None)
-                    break
+        await self._queue.put(None)
+        logger.info("Audio frame producer task finished.")
+        rtc_audio_sending_done.set()
 
 
-                chunk_count += 1
-                logger.debug(f"Read chunk {chunk_count} ({len(data_float)} samples float64 at {self._file.samplerate}Hz)")
+    async def recv(self):
+        if self._producer_task is None:
+            self._producer_task = asyncio.create_task(self._run_producer())
+            logger.info("Started audio frame producer task.")
 
-                # --- Xử lý Channels và Sample Rate ---
-                processed_data_float = data_float
-                current_channels = self._file.channels
-                current_samplerate = self._file.samplerate
-
-                if current_channels != self.target_channels:
-                     if current_channels > 1 and self.target_channels == 1:
-                         processed_data_float = np.mean(processed_data_float.reshape(-1, current_channels), axis=1)
-                     else: # Các trường hợp khác phức tạp hơn
-                         logger.warning(f"Channel conversion from {current_channels} to {self.target_channels} needs better implementation.")
-                         if len(processed_data_float.shape) > 1: processed_data_float = processed_data_float[:, 0]
-
-                if current_samplerate != self.target_sample_rate:
-                    num_samples_in = len(processed_data_float)
-                    num_samples_out = int(num_samples_in * self.target_sample_rate / current_samplerate)
-                    if num_samples_in > 0 and num_samples_out > 0:
-                        time_in = np.linspace(0., float(num_samples_in) / current_samplerate, num_samples_in, endpoint=False)
-                        time_out = np.linspace(0., float(num_samples_in) / current_samplerate, num_samples_out, endpoint=False)
-                        processed_data_float = np.interp(time_out, time_in, processed_data_float)
-                    else:
-                        processed_data_float = np.array([], dtype=np.float64)
-
-                # Chuyển đổi sang int16
-                if len(processed_data_float) > 0:
-                    max_val = np.max(np.abs(processed_data_float))
-                    if max_val > 1.0: processed_data_float = processed_data_float / max_val
-                    data_int16 = (processed_data_float * 32767.0).astype(self.dtype)
-
-                    # Kiểm tra xem số sample có khớp với chunk_samples mong đợi ở target rate không
-                    expected_samples = int(CHUNK_DURATION_S * self.target_sample_rate)
-                    if len(data_int16) != expected_samples:
-                        logger.warning(f"Chunk {chunk_count} sample count mismatch after processing: expected {expected_samples}, got {len(data_int16)}. Padding/truncating.")
-                        # Pad hoặc truncate để khớp (padding bằng 0)
-                        if len(data_int16) < expected_samples:
-                             padding = np.zeros(expected_samples - len(data_int16), dtype=self.dtype)
-                             data_int16 = np.concatenate((data_int16, padding))
-                        else:
-                             data_int16 = data_int16[:expected_samples]
-
-                    await self._queue.put(data_int16)
-                    processed_samples += len(data_int16)
-
-
-
-                    logger.debug(f"Queued audio chunk {chunk_count} ({len(data_int16)} samples int16 at {self.target_sample_rate}Hz). Total processed: {processed_samples}")
-                else:
-                    logger.debug(f"Empty audio chunk {chunk_count} after processing.")
-                if chunk_count > 0 and chunk_count % 5 == 0: # Ví dụ: chèn sau mỗi 5 chunk
-                    logger.info(f"Injecting silence chunk ({silence_chunk_samples} samples)...")
-                    await self._queue.put(silence_chunk_data)
-                    # Không cần sleep ở đây nếu VAD server xử lý
-
-                if self._queue.full():
-                    logger.warning("Audio queue is full, reader sleeping briefly...")
-                    await asyncio.sleep(CHUNK_DURATION_S / 4) # Ngủ chút nếu queue đầy
-
-        except sf.SoundFileError as e:
-            logger.error(f"Error reading sound file: {e}")
-            await self._queue.put(None)
-        except asyncio.CancelledError:
-             logger.info("Audio reader task cancelled.")
-        except Exception as e:
-            logger.exception(f"Unexpected error in audio reader task: {e}")
-            await self._queue.put(None)
-        finally:
-            logger.info(f"Audio reader task finished after processing {chunk_count} chunks.")
-            if self._file and not self._file.closed:
-                self._file.close()
-
-    async def recv(self) -> AudioFrame:
-        """Lấy chunk audio từ queue và tạo AudioFrame."""
-        if self._stopped.is_set():
-            logger.debug("recv called on stopped track.")
-            raise MediaStreamError("Track has been stopped.")
-        if self._reader_task is None:
-             raise MediaStreamError("Track not started. Call start() first.")
-
-        try:
-             # Tăng timeout một chút đề phòng reader bị chậm
-             chunk_data = await asyncio.wait_for(self._queue.get(), timeout=5.0)
-        except asyncio.TimeoutError:
-             logger.error("Timeout waiting for audio chunk from queue.")
-             self.stop() # Dừng track nếu không nhận được dữ liệu
-             raise MediaStreamError("Timeout receiving audio chunk.")
-
-        if chunk_data is None: # Tín hiệu kết thúc
-            logger.info("recv: Received None sentinel, stopping track.")
+        frame = await self._queue.get()
+        if frame is None:
+            logger.info("Received EOS signal in DummyAudioTrack.recv.")
             self.stop()
-            raise MediaStreamError("Audio stream finished.")
-        elif self._stopped.is_set():
-             logger.debug("recv: Track stopped while waiting for queue.")
-             raise MediaStreamError("Track has been stopped.")
-
-        samples_in_chunk = len(chunk_data) // self.target_channels
-        if samples_in_chunk == 0:
-             logger.warning("recv: Received empty audio chunk data.")
-             # Trả về frame trống thay vì lỗi để tránh làm sập sender
-             frame = AudioFrame(format="s16", layout="mono", samples=0)
-             frame.sample_rate = self.target_sample_rate
-             frame.time_base = self._time_base
-             frame.pts = self._pts
-             # Không tăng pts cho frame trống
-             return frame
-             # raise MediaStreamError("Received empty audio chunk data.")
-
-        # Lấy itemsize từ kiểu numpy một cách đúng đắn
-        audio_format = f"s{np.dtype(self.dtype).itemsize * 8}" # Ví dụ: s16
-
-        frame = AudioFrame(format=audio_format,
-                           layout="mono" if self.target_channels == 1 else "stereo",
-                           samples=samples_in_chunk)
-        try:
-             frame.planes[0].update(chunk_data.tobytes())
-        except Exception as e:
-             logger.exception(f"Error updating AudioFrame plane: {e}")
-             raise MediaStreamError("Error creating audio frame") from e
-
-        frame.sample_rate = self.target_sample_rate
-        frame.time_base = self._time_base
-        frame.pts = self._pts
-        self._pts += samples_in_chunk # Cập nhật pts
-
-        logger.debug(f"recv: Returning AudioFrame pts={frame.pts} samples={frame.samples}")
+            raise asyncio.CancelledError("Audio stream ended")
         return frame
 
-# --- Logic Test Chính ---
-async def run_test():
-    global current_session_id
-    pc = RTCPeerConnection(configuration=RTC_CONFIG)
+    def stop(self):
+        super().stop()
+        if self._producer_task and not self._producer_task.done():
+            self._producer_task.cancel()
+            logger.info("Cancelled audio producer task.")
+
+
+async def test_websocket(server_url: str, file_path: str, model: str, api_key: str | None):
+    """Tests the WebSocket endpoint without simulated pauses and collects the final transcript."""
+    ws_url = f"{server_url.replace('http', 'ws')}/v1/realtime?model={model}"
+    logger.info(f"Connecting to WebSocket: {ws_url}")
+
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    final_transcript = "[Transcript retrieval failed or task did not complete properly]"
+    receive_task = None
+
+    try:
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+
+        async with websockets.connect(
+            ws_url,
+            # extra_headers=headers,
+            # ssl=ssl_context
+        ) as websocket:
+            logger.info("WebSocket connected.")
+            receive_task = asyncio.create_task(receive_ws_messages(websocket))
+            send_task = asyncio.create_task(
+                send_ws_audio(
+                    websocket,
+                    file_path,
+                    CHUNK_DURATION_MS,
+                    WS_TARGET_SAMPLE_RATE,
+                    WS_TARGET_CHANNELS,
+                    WS_TARGET_SAMPLE_WIDTH
+                )
+            )
+            await send_task
+            logger.info(f"Finished sending audio. Waiting {WAIT_AFTER_SEND_SECONDS}s for final server responses...")
+            try:
+                final_transcript = await asyncio.wait_for(receive_task, timeout=WAIT_AFTER_SEND_SECONDS)
+                logger.info("Receive task completed and returned combined transcript.")
+            except asyncio.TimeoutError:
+                logger.warning(f"Stopped waiting for responses after {WAIT_AFTER_SEND_SECONDS}s timeout. Cancelling receive task.")
+                if receive_task and not receive_task.done():
+                    receive_task.cancel()
+                    try:
+                        final_transcript = await receive_task
+                        logger.info("Received partial transcript after cancellation.")
+                    except asyncio.CancelledError:
+                        logger.info("Receive task confirmed cancelled after timeout.")
+            except asyncio.CancelledError:
+                logger.warning("Receive task was cancelled externally.")
+                try:
+                    final_transcript = await receive_task
+                except asyncio.CancelledError:
+                     pass
+            except Exception as e:
+                 logger.error(f"Receive task failed with exception: {e}")
+                 if receive_task and receive_task.done() and not receive_task.cancelled():
+                     try:
+                        if receive_task.exception():
+                             logger.error(f"Receive task completed with error: {receive_task.exception()}")
+                        else:
+                             final_transcript = receive_task.result()
+                             logger.info("Received partial transcript after receive task error.")
+                     except Exception as get_result_err:
+                          logger.error(f"Could not get result after receive task error: {get_result_err}")
+
+            logger.info("WebSocket test scenario finished.")
+
+    except websockets.exceptions.ConnectionClosedOK:
+        logger.info("WebSocket connection closed normally by server.")
+    except websockets.exceptions.InvalidStatusCode as e:
+        logger.error(f"WebSocket connection failed: Status {e.status_code}")
+    except ConnectionRefusedError:
+        logger.error(f"Connection refused. Is the server running at {server_url}?")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}", exc_info=True)
+    finally:
+        logger.info(f"\n--- FINAL COMBINED WS TRANSCRIPT ---\n{final_transcript}\n------------------------------------")
+        if receive_task and not receive_task.done():
+            logger.info("Attempting final cancellation of receive task.")
+            receive_task.cancel()
+            try:
+                await receive_task
+            except asyncio.CancelledError:
+                pass
+
+
+
+async def receive_ws_messages(websocket) -> str:
+    """
+    Receives messages, logs them, and collects completed transcripts
+    to return a single combined string at the end.
+    """
+    received_transcripts = []
+    try:
+        async for message in websocket:
+            try:
+                data = json.loads(message)
+                event_type = data.get("type", "unknown")
+                logger.info(f"<<< WS RECV ({event_type}): {json.dumps(data, indent=2)}")
+                if event_type == "conversation.item.input_audio_transcription.completed":
+                    transcript = data.get("transcript")
+                    if transcript:
+                        logger.info(f"---> WS Transcript Received: {transcript}")
+                        received_transcripts.append(transcript.strip())
+            except json.JSONDecodeError:
+                logger.warning(f"<<< WS RECV non-JSON: {message}")
+            except Exception as e:
+                logger.error(f"Error processing received WS message: {e}")
+
+    except websockets.exceptions.ConnectionClosed as e:
+        logger.info(f"WebSocket connection closed by server while receiving (code: {e.code}, reason: {e.reason}). Loop terminated.")
+    except asyncio.CancelledError:
+        logger.info("WS receive task cancelled.")
+        logger.warning("Returning potentially incomplete transcript due to cancellation.")
+    except Exception as e:
+        logger.error(f"Unhandled error in WS receive task main loop: {e}", exc_info=True)
+        logger.error("Returning potentially incomplete transcript due to unhandled error.")
+
+    final_text = ' '.join(received_transcripts)
+    logger.info(f"Receive loop finished/exited. Final combined transcript length: {len(final_text)}")
+    return final_text
+
+
+
+async def send_ws_audio(
+    websocket,
+    file_path: str,
+    chunk_duration_ms: int,
+    target_sample_rate: int,
+    target_channels: int,
+    target_sample_width: int
+):
+    """Streams audio chunks to the WebSocket server using the generator."""
+    logger.info("Starting to send audio chunks...")
+    sent_chunk_count = 0
+    try:
+        audio_generator = stream_audio_chunks( # Gọi generator đã cập nhật (không pause)
+            file_path,
+            chunk_duration_ms,
+            target_sample_rate,
+            target_channels,
+            target_sample_width
+        )
+        async for chunk_bytes in audio_generator:
+            b64_audio = base64.b64encode(chunk_bytes).decode("utf-8")
+            event = { "type": "input_audio_buffer.append", "audio": b64_audio }
+            message = json.dumps(event)
+            await websocket.send(message)
+            sent_chunk_count += 1
+            logger.debug(f"Sent chunk {sent_chunk_count}")
+
+        logger.info(f"Finished sending all {sent_chunk_count} audio chunks via WebSocket.")
+    except websockets.exceptions.ConnectionClosed as e:
+        logger.warning(f"WebSocket connection closed by server while sending (code: {e.code}, reason: {e.reason}).")
+    except asyncio.CancelledError:
+        logger.info("WS send task cancelled.")
+        raise
+    except Exception as e:
+        logger.error(f"Error in WS send task: {e}", exc_info=True)
+        raise
+
+
+async def test_webrtc(server_url: str, file_path: str, model: str, api_key: str | None):
+    """Tests the WebRTC endpoint without simulated pauses."""
+    rtc_url = f"{server_url}/v1/realtime?model={model}"
+    logger.info(f"Initiating WebRTC connection to: {rtc_url}")
+
+    rtc_audio_sending_done.clear()
+    rtc_connection_closed_event.clear()
+
+    pc = RTCPeerConnection()
     data_channel = pc.createDataChannel("events")
-    audio_track: AudioChunkTrack | None = None
-    received_events = asyncio.Queue()
-    client_tasks = set()
-    full_transcript = ""
+    logger.info("RTC PeerConnection and DataChannel created.")
 
-    @pc.on("track")
-    def on_track(track):
-        logger.info(f"Track {track.kind} received")
-        @track.on("ended")
-        async def on_ended():
-            logger.info(f"Track {track.kind} (từ server) ended")
-
-    @pc.on("datachannel")
-    def on_datachannel(channel):
-        logger.warning(f"Data channel '{channel.label}' created by remote (state: {channel.readyState})")
+    received_rtc_transcripts = [] # <<< Thêm list để thu thập transcript RTC
 
     @data_channel.on("open")
-    def on_channel_open():
-        logger.info(f"Data channel '{data_channel.label}' opened")
-        task = asyncio.create_task(send_initial_config(data_channel))
-        client_tasks.add(task)
-        task.add_done_callback(client_tasks.discard)
-
-    @data_channel.on("close")
-    def on_channel_close():
-        logger.info(f"Data channel '{data_channel.label}' closed")
+    def on_open():
+        logger.info("RTC DataChannel 'events' opened.")
 
     @data_channel.on("message")
-    async def on_channel_message(message):
-        nonlocal full_transcript
-        global current_session_id
+    def on_message(message):
         try:
-            event_data = json.loads(message)
-            validated_event = server_event_type_adapter.validate_python(event_data)
-            logger.info(f"<<< Received event: {validated_event.type}")
-
-            if isinstance(validated_event, SessionCreatedEvent):
-                 current_session_id = validated_event.session.id
-                 logger.info(f"    Captured Session ID: {current_session_id}")
-
-            transcript_changed = False
-            if isinstance(validated_event, (ResponseTextDeltaEvent, ResponseAudioTranscriptDeltaEvent)):
-                delta = validated_event.delta
-                logger.info(f"    Delta: '{delta}'")
-                full_transcript += delta
-                transcript_changed = True
-            elif isinstance(validated_event, ConversationItemInputAudioTranscriptionCompletedEvent):
-                 logger.info(f"    Transcription COMPLETED for item {validated_event.item_id}")
-                 final = validated_event.transcript
-                 logger.info(f"    Final transcript for item: '{final}'")
-                 if final is not None:
-                     full_transcript = final
-                     transcript_changed = True
-            elif isinstance(validated_event, ErrorEvent):
-                 logger.error(f"    SERVER ERROR: {validated_event.error.message} (Type: {validated_event.error.type}, Code: {validated_event.error.code})")
-
-            if transcript_changed:
-                 print(f"\rTranscript: {full_transcript}   ", end="", flush=True)
-
-            await received_events.put(validated_event)
+            data = json.loads(message)
+            event_type = data.get("type", "unknown")
+            logger.info(f"<<< RTC RECV ({event_type}): {json.dumps(data, indent=2)}")
+            if event_type == "conversation.item.input_audio_transcription.completed":
+               transcript = data.get("transcript")
+               if transcript:
+                   logger.info(f"---> RTC Transcript Received: {transcript}")
+                   received_rtc_transcripts.append(transcript.strip()) # <<< Thu thập transcript
         except json.JSONDecodeError:
-            logger.error(f"    Failed to decode JSON: {message}")
+            logger.warning(f"<<< RTC RECV non-JSON: {message}")
         except Exception as e:
-            logger.exception(f"    Failed to validate server event: {e}")
+            logger.error(f"Error processing received RTC message: {e}")
 
-    # --- Bắt đầu kết nối ---
+    @data_channel.on("close")
+    def on_close():
+         logger.info("RTC DataChannel 'events' closed.")
+         rtc_connection_closed_event.set()
+
+    @pc.on("iceconnectionstatechange")
+    async def on_iceconnectionstatechange():
+        logger.info(f"RTC ICE connection state is {pc.iceConnectionState}")
+        if pc.iceConnectionState in ("failed", "closed", "disconnected"):
+            rtc_connection_closed_event.set()
+
+    @pc.on("connectionstatechange")
+    async def on_connectionstatechange():
+         logger.info(f"RTC Peer connection state is {pc.connectionState}")
+         if pc.connectionState in ("failed", "closed", "disconnected"):
+             rtc_connection_closed_event.set()
+
+    audio_generator = stream_audio_chunks( # Generator không pause
+        file_path,
+        CHUNK_DURATION_MS,
+        RTC_TARGET_SAMPLE_RATE,
+        RTC_TARGET_CHANNELS,
+        RTC_TARGET_SAMPLE_WIDTH
+    )
+    audio_track = DummyAudioTrack(audio_generator)
+    pc.addTrack(audio_track)
+    logger.info("Audio track added to PeerConnection.")
+
+    final_rtc_transcript = "[RTC Transcript retrieval incomplete]" # <<< Biến cho kết quả RTC
+
     try:
-        audio_track = AudioChunkTrack(AUDIO_FILE_PATH, CHUNK_DURATION_S, TARGET_SAMPLE_RATE, TARGET_CHANNELS)
-        await audio_track.start()
-        pc.addTrack(audio_track)
+        offer = await pc.createOffer()
+        await pc.setLocalDescription(offer)
+        logger.info("RTC Offer created and local description set.")
 
-        await pc.setLocalDescription(await pc.createOffer())
-        offer_sdp = pc.localDescription.sdp
-        offer = RTCSessionDescription(sdp=offer_sdp, type="offer")
-        logger.info("Created Offer SDP")
+        headers = {"Content-Type": "application/sdp"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
 
-        headers = {"Content-Type": "text/plain"}
-        params = {"model": MODEL_ID}
-        logger.info(f"Sending POST request to {API_ENDPOINT}")
-        async with aiohttp.ClientSession() as session:
-             async with session.post(API_ENDPOINT, params=params, data=offer_sdp, headers=headers, ssl=False) as response:
-                 response.raise_for_status()
-                 answer_sdp = await response.text()
-                 logger.info(f"Received Answer SDP (status: {response.status})")
+        async with httpx.AsyncClient(verify=False) as client:
+            logger.info(f"Sending offer to {rtc_url}...")
+            response = await client.post(
+                rtc_url,
+                content=pc.localDescription.sdp.encode("utf-8"),
+                headers=headers,
+                timeout=30.0
+            )
+            response.raise_for_status()
+            answer_sdp = response.text
+            logger.info("Received Answer SDP from server.")
 
         answer = RTCSessionDescription(sdp=answer_sdp, type="answer")
         await pc.setRemoteDescription(answer)
-        logger.info("Set Remote Description")
+        logger.info("Remote description (answer) set.")
 
-        await wait_for_connection(pc)
+        logger.info("Waiting for audio streaming to finish...")
+        await rtc_audio_sending_done.wait()
+        logger.info(f"Audio sending finished. Waiting up to {WAIT_AFTER_SEND_SECONDS}s for final server responses or connection close...")
 
-        if data_channel.readyState != "open":
-            logger.info("Waiting for data channel to open...")
-            try:
-                await asyncio.wait_for(data_channel.transport.transport.sctp.wait_established(), timeout=10.0)
-                await asyncio.sleep(0.1)
-                if data_channel.readyState != "open": raise ConnectionError("Data channel did not open.")
-                logger.info("Data channel reached 'open' state after wait.")
-            except asyncio.TimeoutError:
-                raise ConnectionError("Data channel open timed out.")
+        try:
+            await asyncio.wait_for(
+                rtc_connection_closed_event.wait(),
+                timeout=WAIT_AFTER_SEND_SECONDS
+            )
+            if rtc_connection_closed_event.is_set():
+                logger.info("Connection closed event received.")
+        except asyncio.TimeoutError:
+            logger.info(f"Stopped waiting for RTC responses/closure after {WAIT_AFTER_SEND_SECONDS}s timeout.")
+        except Exception as wait_err:
+             logger.error(f"Error while waiting for RTC closure/timeout: {wait_err}")
 
-        logger.info("Streaming audio chunks from file...")
+        # <<< Ghép transcript RTC sau khi chờ
+        final_rtc_transcript = ' '.join(received_rtc_transcripts)
 
-        # --- Chờ task đọc file hoàn thành ---
-        if audio_track and audio_track._reader_task:
-             logger.info("Waiting for audio reader task to complete...")
-             # Chờ task đọc file, không cần timeout ở đây vì nó sẽ tự kết thúc
-             await audio_track._reader_task
-             logger.info("Audio reader task completed.")
-        else:
-             logger.warning("Audio reader task was not started correctly or track is missing.")
-
-        logger.info("Audio file streaming finished.")
-        logger.info("Waiting a bit longer for final server events...")
-        await asyncio.sleep(10.0)
-
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP Error sending Offer: {e.response.status_code} - {e.response.text}")
+    except httpx.RequestError as e:
+        logger.error(f"HTTP Request Error: {e}")
+    except ConnectionRefusedError:
+         logger.error(f"Connection refused for signaling. Is the server running at {server_url}?")
     except Exception as e:
-         logger.exception(f"An error occurred during connection or streaming: {e}")
+        logger.error(f"WebRTC Error: {e}", exc_info=True)
     finally:
-         # --- Dọn dẹp ---
-         print() # Xuống dòng sau live transcript
-         logger.info("\n" + "-" * 30)
-         logger.info("Final Full transcript received:")
-         logger.info(full_transcript if full_transcript else "[No transcript received]")
-         logger.info("-" * 30)
-
-         logger.info("Closing connection...")
-         # Hủy các task phụ trợ trước
-         for task in client_tasks:
-             if not task.done():
-                 task.cancel()
-         try:
-             await asyncio.gather(*client_tasks, return_exceptions=True)
-         except asyncio.CancelledError:
-             pass
-
-         # Dừng audio track nếu tồn tại
-         if audio_track:
-             audio_track.stop()
-
-         # Đóng PeerConnection
-         if pc and pc.connectionState != "closed":
+        # <<< Log kết quả RTC
+        logger.info(f"\n--- FINAL COMBINED RTC TRANSCRIPT ---\n{final_rtc_transcript}\n------------------------------------")
+        logger.info("Closing RTC PeerConnection.")
+        if pc.connectionState != "closed":
              await pc.close()
-             logger.info("PeerConnection closed.")
-         else:
-              logger.info("PeerConnection already closed or not initialized.")
+        rtc_audio_sending_done.clear()
+        rtc_connection_closed_event.clear()
+        logger.info("WebRTC test scenario finished.")
 
-         logger.info("Connection closed routine finished.")
 
-async def send_initial_config(channel: RTCDataChannel):
-    logger.info("Sending initial configuration...")
-    try:
-        # --- COMMENT HOẶC XÓA PHẦN UPDATE VAD NÀY ---
-        # update_data = PartialSession(turn_detection=None)
-        # fields_to_send = {'turn_detection': None}
-        # if fields_to_send:
-        #     session_payload = PartialSession(turn_detection=None)
-        #     session_update = SessionUpdateEvent(type="session.update", session=session_payload)
-        #     logger.info(f">>> Sending: {session_update.type} to disable VAD (if supported)")
-        #     channel.send(session_update.model_dump_json())
-        #     await asyncio.sleep(0.1)
-        # else:
-        #      logger.info("No specific initial config fields set to send.")
-        # --- KẾT THÚC COMMENT/XÓA ---
+# --- Main Execution (Giữ nguyên) ---
+async def main():
+    parser = argparse.ArgumentParser(description="Test Realtime Endpoints")
+    parser.add_argument(
+        "protocol", choices=["ws", "rtc"], help="Protocol to test (ws or rtc)"
+    )
+    parser.add_argument(
+        "--server", default="http://127.0.0.1:8000", help="Server base URL"
+    )
+    parser.add_argument(
+        "--file", default="generated_429000_long.wav", help="Path to the WAV audio file"
+    )
+    parser.add_argument(
+        "--model", default="Systran/faster-whisper-large-v3",
+        help="Model name to use"
+    )
+    parser.add_argument("--api-key", default=None, help="API key if required")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
 
-        # Vẫn gửi ResponseCreateEvent
-        create_response = ResponseCreateEvent(type="response.create")
-        logger.info(f">>> Sending: {create_response.type}")
-        channel.send(create_response.model_dump_json())
+    args = parser.parse_args()
 
-        logger.info("Finished sending initial configuration.")
-    except Exception as e:
-        logger.exception(f"Error sending initial configuration: {e}")
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logger.setLevel(logging.DEBUG)
+        logging.getLogger("websockets").setLevel(logging.INFO)
+        logging.getLogger("aiortc").setLevel(logging.INFO)
+
+    audio_file_path = Path(args.file)
+    if not audio_file_path.is_file():
+        logger.error(f"Audio file not found: {args.file}")
+        return
+
+    if args.protocol == "ws":
+        await test_websocket(args.server, str(audio_file_path), args.model, args.api_key)
+    elif args.protocol == "rtc":
+        await test_webrtc(args.server, str(audio_file_path), args.model, args.api_key)
 
 if __name__ == "__main__":
     try:
-        asyncio.run(run_test())
+        asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("\nTest interrupted by user.")
-    except Exception as e:
-         logger.exception(f"Unhandled error during test run: {e}")
-    finally:
-         print() # Đảm bảo con trỏ xuống dòng
+        logger.info("Test interrupted by user.")
+    
+
+
+    # # --- End of the script ---
+    # # Note: The script will exit after the main function completes.
+    # model = "erax-ai/EraX-WoW-Turbo-V1.1-CT2"
+
+    #python testing.py rtc --file generated_429000_long.wav --model Systran/faster-whisper-large-v3 --server http://localhost:8000
+    #python testing.py ws --file generated_429000_long.wav --model erax-ai/EraX-WoW-Turbo-V1.1-CT2 --server http://localhost:8000

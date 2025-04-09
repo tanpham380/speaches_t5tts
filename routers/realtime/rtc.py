@@ -31,11 +31,11 @@ from realtime.input_audio_buffer_event_router import (
     event_router as input_audio_buffer_event_router,
 )
 from realtime.response_event_router import event_router as response_event_router
-from realtime.rtc.audio_stream_track import AudioStreamTrack
-from realtime.session import create_session_object_configuration
-from realtime.session_event_router import event_router as session_event_router
-from routers.realtime.ws import event_listener
-from mouble_types.realtime import (
+from  realtime.rtc.audio_stream_track import AudioStreamTrack
+from  realtime.session import create_session_object_configuration
+from  realtime.session_event_router import event_router as session_event_router
+from  routers.realtime.ws import event_listener
+from  mouble_types.realtime import (
     SERVER_EVENT_TYPES,
     ErrorEvent,
     InputAudioBufferAppendEvent,
@@ -102,56 +102,39 @@ def message_handler(ctx: SessionContext, message: str) -> None:
 
 
 async def audio_receiver(ctx: SessionContext, track: RemoteStreamTrack) -> None:
-    # logger.info(f"[{ctx.session.id}] audio_receiver task started for track {track.id}") # Thêm session ID
+    # Initialize buffer to store audio data
     buffer = np.array([], dtype=np.int16)
-    frame_count = 0
-    try: # Thêm try/except bao quát
-        while True:
-            # logger.debug(f"[{ctx.session.id}] Waiting for frame...") # Log chờ frame
-            frames = await track.recv()
-            frame_count += 1
-            # logger.info(f"[{ctx.session.id}] Received frame batch {frame_count} (type: {type(frames)})") # Log khi nhận frame
 
-            # Kiểm tra kỹ các assert (có thể tạm comment nếu nghi ngờ)
-            assert isinstance(frames, AudioFrame)
-            # logger.debug(f"[{ctx.session.id}] Frame props: SR={frames.sample_rate}, Layout={frames.layout.name}, Format={frames.format.name}")
-            assert frames.sample_rate == 48000
-            assert frames.layout.name == "stereo"
-            assert frames.format.name == "s16"
+    while True:
+        frames = await track.recv()
+        # ensure that the received frames are of expected format
+        assert isinstance(frames, AudioFrame)
+        assert frames.sample_rate == 48000
+        assert frames.layout.name == "stereo"
+        assert frames.format.name == "s16"
 
-            # logger.debug(f"[{ctx.session.id}] Resampling...")
-            resampler = AudioResampler(format="s16", layout="mono", rate=SAMPLE_RATE)
-            frames_resampled = resampler.resample(frames) # Đổi tên biến
-            # logger.debug(f"[{ctx.session.id}] Resampling done.")
+        resampler = AudioResampler(format="s16", layout="mono", rate=SAMPLE_RATE)
+        frames = resampler.resample(frames)
 
-            for frame in frames_resampled: # Lặp qua các frame đã resample
-                arr = frame.to_ndarray()
-                buffer = np.append(buffer, arr.flatten())
-                # logger.debug(f"[{ctx.session.id}] Buffer size after append: {len(buffer)} / {MIN_BUFFER_SIZE}") # Log kích thước buffer
+        # Accumulate audio data
+        for frame in frames:
+            arr = frame.to_ndarray()
+            buffer = np.append(buffer, arr.flatten())  # Flatten and append to buffer
 
-                if len(buffer) >= MIN_BUFFER_SIZE:
-                    # logger.info(f"[{ctx.session.id}] Buffer reached threshold ({len(buffer)} >= {MIN_BUFFER_SIZE}). Publishing event.") # Log khi đủ buffer
-                    audio_bytes = buffer.tobytes()
-                    assert len(audio_bytes) == len(buffer) * 2, "Audio sample width is not 2 bytes"
-
-                    # >>> Log ngay trước khi publish <<<
-                    # logger.debug(f"[{ctx.session.id}] Publishing InputAudioBufferAppendEvent with {len(audio_bytes)} bytes.")
-                    ctx.pubsub.publish_nowait(
-                        InputAudioBufferAppendEvent(
-                            type="input_audio_buffer.append",
-                            audio=base64.b64encode(audio_bytes).decode(),
-                        )
+            # When buffer reaches or exceeds target size, emit event
+            if len(buffer) >= MIN_BUFFER_SIZE:
+                # Convert to bytes and emit event
+                audio_bytes = buffer.tobytes()
+                assert len(audio_bytes) == len(buffer) * 2, "Audio sample width is not 2 bytes"
+                ctx.pubsub.publish_nowait(
+                    InputAudioBufferAppendEvent(
+                        type="input_audio_buffer.append",
+                        audio=base64.b64encode(audio_bytes).decode(),
                     )
-                    # logger.debug(f"[{ctx.session.id}] Event published.") # Log sau khi publish
+                )
 
-                    buffer = np.array([], dtype=np.int16) # Reset buffer
-    except asyncio.CancelledError:
-         logger.info(f"[{ctx.session.id}] audio_receiver task cancelled.")
-    except Exception as e:
-         # >>> Log lỗi chi tiết <<<
-         logger.exception(f"[{ctx.session.id}] Error in audio_receiver loop: {e}")
-    finally:
-         logger.info(f"[{ctx.session.id}] audio_receiver task finished (processed {frame_count} frame batches).")
+                buffer = np.array([], dtype=np.int16)
+
 
 def datachannel_handler(ctx: SessionContext, channel: RTCDataChannel) -> None:
     logger.info(f"Data channel created: {channel}")
